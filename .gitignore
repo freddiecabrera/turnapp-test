@@ -1,0 +1,26 @@
+node_modules/
+dist/
+build/
+.expo/
+.expo-shared/
+web-build/
+
+# env
+.env
+.env.local
+*.local
+
+# logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+
+# api generated
+apps/api/src/generated/
+apps/api/prisma/generated/
+
+# uploaded card images (kept out of git; seeded from assets/)
+apps/api/static/cards/*
+!apps/api/static/cards/.gitkeep

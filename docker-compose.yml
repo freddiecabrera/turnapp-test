@@ -1,0 +1,21 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: turnapp-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-turn}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-turn}
+      POSTGRES_DB: ${POSTGRES_DB:-turnapp}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - turnapp_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-turn} -d ${POSTGRES_DB:-turnapp}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  turnapp_pgdata:

@@ -1,0 +1,25 @@
+{
+  "name": "turnapp-mock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Turn — collectibles mock app. Candidate take-home base (mobile + api + admin + db).",
+  "workspaces": [
+    "packages/*",
+    "apps/api",
+    "apps/admin"
+  ],
+  "scripts": {
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v && docker compose up -d",
+    "api:migrate": "npm --workspace @turnapp/api run migrate",
+    "api:seed": "npm --workspace @turnapp/api run seed",
+    "api:setup": "npm run db:up && npm --workspace @turnapp/api run prisma:generate && npm run api:migrate && npm run api:seed",
+    "dev:api": "npm --workspace @turnapp/api run dev",
+    "dev:admin": "npm --workspace @turnapp/admin run dev",
+    "dev:mobile": "npm --prefix apps/mobile run start"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

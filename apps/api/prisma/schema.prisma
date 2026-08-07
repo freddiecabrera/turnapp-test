@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String  @id @default(cuid())
+  username     String  @unique
+  email        String  @unique
+  passwordHash String
+  userIdNumber Int     @unique
+  pointsBalance Int    @default(0)
+  isAdmin      Boolean @default(false)
+
+  cards        UserCard[]
+  transactions PointsTransaction[]
+  scannedCodes QrCode[]
+
+  createdAt DateTime @default(now())
+}
+
+model Season {
+  id          String  @id @default(cuid())
+  name        String  @unique
+  description String?
+
+  cards Card[]
+}
+
+model Card {
+  id              String  @id @default(cuid())
+  name            String
+  type            String?
+  universe        String?
+  rarity          String?
+  rarityLevel     Int?
+  cardNumber      String?
+  story           String?
+  imageUrl        String?
+
+  season   Season @relation(fields: [seasonId], references: [id], onDelete: Cascade)
+  seasonId String
+
+  owners  UserCard[]
+  qrCodes QrCode[]
+
+  createdAt DateTime @default(now())
+}
+
+model UserCard {
+  id             String   @id @default(cuid())
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId         String
+  card           Card     @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId         String
+  quantity       Int      @default(1)
+  firstScannedAt DateTime @default(now())
+
+  @@unique([userId, cardId])
+}
+
+model PointsTransaction {
+  id          String   @id @default(cuid())
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId      String
+  amount      Int
+  description String
+  createdAt   DateTime @default(now())
+}
+
+// A single-use QR code that, when scanned, grants a card + points to a user.
+model QrCode {
+  id            String    @id @default(cuid())
+  code          String    @unique
+  card          Card      @relation(fields: [cardId], references: [id], onDelete: Cascade)
+  cardId        String
+  pointsAwarded Int       @default(50)
+  batchId       String?
+  batchLabel    String?
+  scannedByUser User?     @relation(fields: [scannedByUserId], references: [id])
+  scannedByUserId String?
+  scannedAt     DateTime?
+  createdAt     DateTime  @default(now())
+
+  @@index([batchId])
+}
