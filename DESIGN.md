@@ -269,6 +269,7 @@ what they offered, does the recipient still own what was requested. One extra qu
 | Case | Where | Result |
 | --- | --- | --- |
 | Trading with yourself | create | 400 |
+| Either party is a staff account | create, both directions | 400 |
 | A null byte in any id (body or `:id`) | create/accept/decline, edge guard | 400 |
 | Offering and requesting the same card | create | 400 |
 | Offering a card you don't own | create | 400 |
@@ -383,6 +384,23 @@ identity check.
 and collections are public by nature in a trading app — stated as a product decision rather
 than left implicit.
 
+**A trade has two collector accounts on it. Staff accounts are not collectors.** `GET
+/users/search` filters admins out — "admins are staff accounts, not trading partners" — and
+that is a rule, not a display preference, so `POST /trades` enforces it too: an offer
+addressed to an admin is a 400, and so is one sent by an admin. Both directions, because "not
+a trading partner" is symmetric; a staff account offering a card puts staff on a collector's
+board exactly as much as one receiving an offer does. A filter the create endpoint contradicts
+is a rule that holds only where the wizard happens to look, and anyone who knows an id walks
+past it.
+
+The staff check is at creation only. Accept and decline don't re-check it, for the same reason
+decline doesn't re-check ownership: a trade that already exists must stay answerable, and
+refusing there would strand a row on somebody's board with no way to clear it.
+
+The sender's side reads `isAdmin` from the JWT, which is already how staff is decided
+everywhere else — `requireAdmin` gates the whole admin router on that same claim. The
+recipient's side reads it from the row being looked up, since that query has to happen anyway.
+
 **Null bytes are refused at the edge, on every id.** Postgres rejects `0x00` inside a `text`
 value (`22021 invalid byte sequence for encoding "UTF8"`), so a string carrying one cannot be
 queried with — only refused. `asyncRouter` stops that rejection killing the process, but a 500
@@ -396,7 +414,7 @@ well-formed cuid with one appended got all the way to Postgres.
 ### Status codes
 
 - **400** — validation: self-trade, same card both sides, missing fields, card not owned,
-  a null byte in any id
+  a staff account on either side, a null byte in any id
 - **403** — not the recipient, trying to respond
 - **404** — trade, user, or card not found
 - **409** — already answered, or ownership vanished between create and accept

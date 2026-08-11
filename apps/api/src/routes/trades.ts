@@ -82,6 +82,32 @@ const TRADE_NOT_FOUND = "We couldn't find that trade.";
 const INVALID_TRADE_ID = "That isn't a valid trade id.";
 
 /**
+ * A trade has two collector accounts on it, and staff accounts are not
+ * collectors. One rule, and a sentence for whichever side of it the caller is
+ * standing on.
+ *
+ * `GET /users/search` has always filtered admins out with the comment "admins
+ * are staff accounts, not trading partners", but `POST /trades` accepted an
+ * admin id and answered 201 — so the rule held exactly where the wizard happens
+ * to look and nowhere else, and anyone who knew an id walked straight past it.
+ * A filter that a second endpoint contradicts is a UI convenience being
+ * mistaken for a rule. This makes it the rule.
+ *
+ * Both directions, because "not a trading partner" is symmetric: a staff
+ * account offering a card to a collector puts staff on that collector's board
+ * just as surely as one receiving an offer does, and half a rule is the thing
+ * being fixed here.
+ *
+ * Enforced at creation only. Accept and decline deliberately don't re-check —
+ * a trade that predates this rule, or one written directly to the table, must
+ * still be answerable, and refusing there would strand a row on somebody's
+ * board with no way to clear it. Same reasoning as decline not re-checking
+ * ownership. See DESIGN.md, "Edge cases and where they're caught".
+ */
+const STAFF_CANNOT_SEND = "Staff accounts can't send trades.";
+const STAFF_CANNOT_RECEIVE = "You can't trade with a staff account.";
+
+/**
  * Everything `toPublicTrade` needs, and nothing it doesn't.
  *
  * Top-level `include` for the trade's own columns, nested `select` for the two
@@ -349,6 +375,15 @@ tradesRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "You can't trade with yourself." });
   }
 
+  // Staff accounts are not trading partners — see the note above
+  // `STAFF_CANNOT_SEND`. Read from the token because that is already how staff
+  // is decided everywhere else: `requireAdmin` gates the entire admin router on
+  // this same claim, so a second source of truth for it here would be the
+  // novelty, not the safeguard.
+  if (req.auth!.isAdmin) {
+    return res.status(400).json({ error: STAFF_CANNOT_SEND });
+  }
+
   if (offeredCardId === requestedCardId) {
     return res
       .status(400)
@@ -361,10 +396,16 @@ tradesRouter.post("/", async (req, res) => {
     // memory where a log line or an error dump can reach them.
     const recipient = await prisma.user.findUnique({
       where: { id: toUserId },
-      select: { id: true },
+      select: { id: true, isAdmin: true },
     });
     if (!recipient) {
       return res.status(404).json({ error: "We couldn't find that person." });
+    }
+
+    // 400 rather than 404. The account exists and the caller may well have a
+    // legitimate reason to know it does; what's wrong is the trade, not the id.
+    if (recipient.isAdmin) {
+      return res.status(400).json({ error: STAFF_CANNOT_RECEIVE });
     }
 
     // One round trip for both cards; the messages still name which one is

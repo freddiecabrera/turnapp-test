@@ -531,6 +531,89 @@ describe("POST /trades", () => {
     });
   });
 
+  /**
+   * `GET /users/search` filters admins out because "admins are staff accounts,
+   * not trading partners". That sentence is either a rule or a UI convenience,
+   * and it used to be both at once: search hid them, and `POST /trades` took an
+   * admin id and answered 201. These cases pin the resolution — it is a rule,
+   * on both sides of the trade, at the endpoint that creates one.
+   *
+   * Each fixture gives the staff account the card in question, so the staff rule
+   * is the only thing that can produce the 400. Without that, "they don't have
+   * the card you asked for" would answer these identically and the test would go
+   * green against no rule at all.
+   */
+  describe("400 — staff accounts are not trading partners", () => {
+    it("refuses an offer addressed to a staff account", async () => {
+      const { alice, aliceOnly, common } = await twoTraders();
+      const staff = await createUser("staffer", { isAdmin: true });
+      await grant(staff.id, common.id);
+
+      const res = await post(alice, {
+        toUserId: staff.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "You can't trade with a staff account." });
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("refuses an offer sent by a staff account", async () => {
+      const { bob, bobOnly, common } = await twoTraders();
+      const staff = await createUser("staffer", { isAdmin: true });
+      await grant(staff.id, common.id);
+
+      // The mirror of the case above, and the half a target-only check would
+      // miss: staff on a collector's board either way.
+      const res = await post(staff, {
+        toUserId: bob.id,
+        offeredCardId: common.id,
+        requestedCardId: bobOnly.id,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "Staff accounts can't send trades." });
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("agrees with the partner search that never offers them", async () => {
+      const { alice, aliceOnly, common } = await twoTraders();
+      const staff = await createUser("staffer", { isAdmin: true });
+      await grant(staff.id, common.id);
+
+      // Step 1 of the wizard cannot produce this account…
+      const search = await authedApi(alice, "get", "/users/search?q=staffer");
+      expect(search.status).toBe(200);
+      expect(search.body).toEqual([]);
+
+      // …and neither can already knowing the id, which was the hole. One rule,
+      // two endpoints, same answer.
+      const res = await post(alice, {
+        toUserId: staff.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+      expect(res.status).toBe(400);
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("still lets two collectors trade", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      await createUser("staffer", { isAdmin: true });
+
+      // The rule is about who is on the trade, not about an admin existing.
+      const res = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+
+      expect(res.status).toBe(201);
+    });
+  });
+
   describe("404 — something named doesn't exist", () => {
     it("404s for an unknown recipient", async () => {
       const { alice, aliceOnly, bobOnly } = await twoTraders();
