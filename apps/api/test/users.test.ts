@@ -141,6 +141,49 @@ describe("GET /users/search", () => {
     expect((res.body as UserSummary[]).length).toBeLessThanOrEqual(20);
   });
 
+  it("does not treat % or _ in the query as wildcards", async () => {
+    const caller = await createUser("caller");
+    await createUser("Taylor Poole");
+    await createUser("Casey Rhodes");
+
+    // Unescaped, ILIKE reads these as "anything" and returns the whole
+    // directory twenty rows at a time.
+    for (const q of ["%", "_", "a%", "%%", "%_%"]) {
+      const res = await authedApi(caller, "get", `/users/search?q=${encodeURIComponent(q)}`);
+      expect(res.status, q).toBe(200);
+      expect(res.body, q).toEqual([]);
+    }
+  });
+
+  it("does not match a username through an underscore wildcard", async () => {
+    const caller = await createUser("caller");
+    const taylor = await createUser("Taylor Poole");
+
+    const wild = await authedApi(caller, "get", "/users/search?q=T_ylor");
+    expect(wild.body).toEqual([]);
+
+    // The literal spelling still finds them, so this isn't just a dead query.
+    const literal = await authedApi(caller, "get", "/users/search?q=Taylor");
+    expect((literal.body as UserSummary[]).map((u) => u.id)).toEqual([taylor.id]);
+  });
+
+  it("finds a username that contains a LIKE metacharacter", async () => {
+    const caller = await createUser("caller");
+    const percent = await createUser("100%_real");
+    const under = await createUser("under_score");
+    const back = await createUser("back\\slash");
+
+    const byUnderscore = await authedApi(caller, "get", `/users/search?q=${encodeURIComponent("_")}`);
+    expect((byUnderscore.body as UserSummary[]).map((u) => u.id)).toEqual([percent.id, under.id]);
+
+    const byPercent = await authedApi(caller, "get", `/users/search?q=${encodeURIComponent("100%")}`);
+    expect((byPercent.body as UserSummary[]).map((u) => u.id)).toEqual([percent.id]);
+
+    // Backslash is Postgres's own LIKE escape, so it has to survive escaping too.
+    const byBackslash = await authedApi(caller, "get", `/users/search?q=${encodeURIComponent("k\\s")}`);
+    expect((byBackslash.body as UserSummary[]).map((u) => u.id)).toEqual([back.id]);
+  });
+
   it("rejects a null byte in the query without dropping the process", async () => {
     const { alice, bob } = await twoTraders();
 

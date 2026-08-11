@@ -39,6 +39,21 @@ function hasNullByte(value: string): boolean {
 }
 
 /**
+ * Escape the characters `LIKE` treats as wildcards, so `q` matches literally.
+ *
+ * Prisma's `contains` compiles to `ILIKE '%' || $1 || '%'` and passes the value
+ * through untouched — it escapes nothing. Left alone, `q=%` matches every row
+ * and returns the entire user base, and `q=T_ylor` matches "Taylor" because `_`
+ * is "any single character". Backslash is Postgres's default LIKE escape, and
+ * it has to be escaped first-class or an input of `\%` would smuggle a wildcard
+ * back in. One pass with a callback does all three without re-processing what
+ * it just wrote.
+ */
+function likeLiteral(q: string): string {
+  return q.replace(/[\\%_]/g, (char) => `\\${char}`);
+}
+
+/**
  * Parse `q` as a user ID number, or return null when it isn't one.
  *
  * `userIdNumber` is an `Int`, so a query of "abc" has no business reaching that
@@ -56,12 +71,14 @@ function asUserIdNumber(q: string): number | null {
 /**
  * Find someone to trade with, by username fragment or exact ID number.
  *
- * Three deliberate limits keep this a lookup rather than a directory:
- * an empty query returns nothing instead of everyone, admins never appear, and
- * the result set is capped. Together they mean you can find a person you
- * already know something about, and can't enumerate the user base.
+ * Three deliberate limits keep this a lookup rather than a directory: an empty
+ * query returns nothing instead of everyone, admins never appear, and the
+ * result set is capped. They make enumeration expensive rather than impossible
+ * — a caller willing to walk every prefix still gets there twenty rows at a
+ * time — so this is a speed bump, not an access control. What actually keeps
+ * the sensitive columns safe is the `select` below.
  *
- * The `select` is not decoration. `User` carries `email` and `passwordHash`;
+ * That `select` is not decoration. `User` carries `email` and `passwordHash`;
  * `toUserSummary` keeps them out of the response, but a bare `findMany` still
  * pulls every hash into API memory where a log line or an error dump can reach
  * it. Don't fetch what must never be shown.
@@ -84,7 +101,7 @@ usersRouter.get("/search", async (req, res) => {
       id: { not: req.auth!.userId },
       isAdmin: false,
       OR: [
-        { username: { contains: q, mode: "insensitive" } },
+        { username: { contains: likeLiteral(q), mode: "insensitive" } },
         // Exact match: an ID number is an identifier, not a name to browse by.
         ...(idNumber !== null ? [{ userIdNumber: idNumber }] : []),
       ],
