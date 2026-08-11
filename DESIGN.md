@@ -217,9 +217,16 @@ await prisma.$transaction(async (tx) => {
 });
 ```
 
-Claiming **before** moving cards is what stops two concurrent accepts from both clearing the
-ownership checks. Any throw rolls the whole transaction back, leaving the trade `PENDING` and
-both collections untouched.
+Any throw rolls the whole transaction back, leaving the trade `PENDING` and both collections
+untouched — which is also why claiming **before** moving cards is not what stops the swap
+happening twice. Nothing does, because nothing has to: a loser that moved the cards first would
+still fail the claim, and the moves would unwind with it. Either order swaps exactly once.
+
+Claiming first buys two other things. The loser gets the true answer — "somebody already
+answered" rather than "they no longer have the card they offered", which after a move-first
+loser's own decrement describes a copy it took itself. And the transaction takes no `UserCard`
+locks it is only going to throw away, so it isn't holding rows other trades want while it works
+out that it has already lost.
 
 ### Why the guard is sufficient
 

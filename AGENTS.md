@@ -256,8 +256,8 @@ state transition that must not double-apply.
   unhandled rejection and Node 20 exits the process — one malformed request takes the API down
   for everybody. `asyncRouter` wraps at registration so the boundary can't be forgotten a
   handler at a time, but it is opt-in per router: a plain `Router()` silently has none of it.
-  `routes/trades.ts` on `feat/th6-create-trade` is still a plain `Router()` and needs
-  converting when that branch lands.
+  Every router in `src/routes` is one, `routes/trades.ts` included — it was converted on
+  `feat/th7-accept-trade`. `test/async-boundary.test.ts` is what keeps a new one honest.
 - **Auth**: `appRouter` is entirely behind `requireAuth`; `req.auth.userId` is the caller.
   Never take an actor identity from the request body.
 - **Validation is hand-rolled.** No zod or equivalent — match the existing inline

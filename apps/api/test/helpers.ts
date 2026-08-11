@@ -116,6 +116,132 @@ export async function hasRowFor(userId: string, cardId: string): Promise<boolean
   return row !== null;
 }
 
+/**
+ * Every copy of a card in existence, across all collections.
+ *
+ * The number a race must conserve. Per-user assertions say where the copies
+ * are; this one says how many there are, which is the property a trade cannot
+ * be allowed to change and a scan may only change by one.
+ */
+export async function totalCopiesOf(cardId: string): Promise<number> {
+  const { _sum } = await prisma.userCard.aggregate({
+    where: { cardId },
+    _sum: { quantity: true },
+  });
+  return _sum.quantity ?? 0;
+}
+
+/** A single-use QR code granting `cardId`. */
+export async function createQrCode(cardId: string, code: string, pointsAwarded = 50) {
+  return prisma.qrCode.create({ data: { code, cardId, pointsAwarded } });
+}
+
+/**
+ * Dispatch a supertest request now, rather than when it is awaited.
+ *
+ * A supertest `Test` is lazy — it sends nothing until something calls `.then`.
+ * Two requests that are only awaited later are two requests that never
+ * overlapped, so a concurrency test built that way is a sequential test with a
+ * misleading name.
+ */
+export function inFlight<T>(request: PromiseLike<T>): Promise<T> {
+  return Promise.resolve(request.then((value) => value));
+}
+
+/**
+ * Block until `count` backends are waiting on a lock in the test database.
+ *
+ * `wait_event_type = 'Lock'` is a heavyweight lock wait — a query parked on a
+ * row another transaction holds. That is the observable that says a request has
+ * reached the write we care about and gone no further, which is what lets a
+ * test place one request *inside* another's transaction instead of hoping the
+ * scheduler does it.
+ *
+ * Throws rather than returning on timeout: a concurrency test whose setup
+ * silently didn't happen is worse than no test.
+ */
+export async function waitForLockWaiters(count: number, timeoutMs = 5_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const [{ waiting }] = await prisma.$queryRaw<Array<{ waiting: number }>>`
+      SELECT count(*)::int AS waiting
+      FROM pg_stat_activity
+      WHERE datname = current_database() AND wait_event_type = 'Lock'
+    `;
+    if (waiting >= count) return;
+    if (Date.now() > deadline) {
+      throw new Error(
+        `Timed out after ${timeoutMs}ms waiting for ${count} blocked queries; saw ${waiting}.`
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+/**
+ * Hold an exclusive lock on one `UserCard` row for the duration of `body`.
+ *
+ * Two requests fired with `Promise.all` interleave however the event loop and
+ * the connection pool feel like that run — which is fine when every ordering
+ * must produce the same answer, and useless when the bug lives in one specific
+ * ordering. Locking the row both requests are about turns "eventually one of
+ * them blocks" into "this one blocks, here, until I say so": fire a request,
+ * wait for it to park on this lock, fire the next, then release and let the
+ * queue drain in the order they arrived.
+ *
+ * The requests are genuinely concurrent throughout — both are in flight, in
+ * their own transactions, at the same time. Only the interleaving is pinned.
+ *
+ * The lock is taken on a real Postgres connection, so the row must already
+ * exist; a missing row would take no lock and quietly turn every test using it
+ * back into a race.
+ */
+export async function withUserCardLocked<T>(
+  userId: string,
+  cardId: string,
+  body: () => Promise<T>
+): Promise<T> {
+  let acquired!: () => void;
+  const isAcquired = new Promise<void>((resolve) => {
+    acquired = resolve;
+  });
+  let release!: () => void;
+  const isReleased = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  // A longer timeout than Prisma's 5s default: this transaction is deliberately
+  // idle while the test drives requests into it. Vitest's own 5s per-test
+  // timeout is the real backstop, and it reports the failing test by name.
+  const holder = prisma.$transaction(
+    async (tx) => {
+      const locked = await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT id FROM "UserCard"
+        WHERE "userId" = ${userId} AND "cardId" = ${cardId}
+        FOR UPDATE
+      `;
+      if (locked.length !== 1) {
+        throw new Error(`Expected exactly one UserCard row to lock, found ${locked.length}.`);
+      }
+      acquired();
+      await isReleased;
+    },
+    { timeout: 30_000, maxWait: 10_000 }
+  );
+
+  // Race, not a bare await: if the lock can't be taken the holder rejects, and
+  // waiting on `isAcquired` alone would hang until the test timed out with no
+  // hint of why.
+  await Promise.race([isAcquired, holder]);
+
+  try {
+    return await body();
+  } finally {
+    release();
+    await holder;
+  }
+}
+
 export function authHeaderFor(user: { id: string; isAdmin: boolean }) {
   return `Bearer ${signToken({ userId: user.id, isAdmin: user.isAdmin })}`;
 }
