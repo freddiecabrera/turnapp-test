@@ -3,7 +3,7 @@ import type { CreateTradeRequest, Trade } from "@turnapp/shared";
 import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
-import { toPublicTrade } from "../serialize";
+import { TRADE_WITH_PARTIES, toPublicTrade } from "../serialize";
 import { hasNullByte } from "../validation";
 
 /**
@@ -106,21 +106,6 @@ const INVALID_TRADE_ID = "That isn't a valid trade id.";
  */
 const STAFF_CANNOT_SEND = "Staff accounts can't send trades.";
 const STAFF_CANNOT_RECEIVE = "You can't trade with a staff account.";
-
-/**
- * Everything `toPublicTrade` needs, and nothing it doesn't.
- *
- * Top-level `include` for the trade's own columns, nested `select` for the two
- * users: the serializer wants id, username and userIdNumber, and `User` also
- * carries `email` and `passwordHash`. A bare `include: { fromUser: true }`
- * pulls both into API memory, where a log line or an error dump can reach them.
- */
-const TRADE_WITH_PARTIES = {
-  fromUser: { select: { id: true, username: true, userIdNumber: true } },
-  toUser: { select: { id: true, username: true, userIdNumber: true } },
-  offeredCard: true,
-  requestedCard: true,
-} as const;
 
 /**
  * A refusal that already knows its status code and its user-facing sentence.

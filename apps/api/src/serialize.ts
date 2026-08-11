@@ -1,7 +1,7 @@
 import type {
   Card as PrismaCard,
+  Prisma,
   QrCode as PrismaQrCode,
-  Trade as PrismaTrade,
   User as PrismaUser,
 } from "@prisma/client";
 import type { Card, QrCode, Trade, User, UserSummary } from "@turnapp/shared";
@@ -63,12 +63,37 @@ export function toUserSummary(
   };
 }
 
-type TradeWithParties = PrismaTrade & {
-  fromUser: Pick<PrismaUser, "id" | "username" | "userIdNumber">;
-  toUser: Pick<PrismaUser, "id" | "username" | "userIdNumber">;
-  offeredCard: PrismaCard;
-  requestedCard: PrismaCard;
-};
+/**
+ * Everything `toPublicTrade` needs, and nothing it doesn't.
+ *
+ * Top-level `include` for the trade's own columns, nested `select` for the two
+ * users: the serializer wants id, username and userIdNumber, and `User` also
+ * carries `email` and `passwordHash`. A bare `include: { fromUser: true }`
+ * pulls both into API memory, where a log line or an error dump can reach them.
+ *
+ * Lives here rather than beside the queries because the type below is derived
+ * from it, and the pair has to stay together to mean anything: a select and a
+ * hand-written type describing that select are two copies of one shape, and the
+ * copy that drifts is the one nothing is checking. `satisfies` keeps it a
+ * literal — Prisma needs the exact keys to compute the payload type, which a
+ * `: Prisma.TradeInclude` annotation would widen away — while still failing on
+ * a field name Prisma doesn't recognise.
+ */
+export const TRADE_WITH_PARTIES = {
+  fromUser: { select: { id: true, username: true, userIdNumber: true } },
+  toUser: { select: { id: true, username: true, userIdNumber: true } },
+  offeredCard: true,
+  requestedCard: true,
+} as const satisfies Prisma.TradeInclude;
+
+/**
+ * What a query using that include comes back as.
+ *
+ * Derived rather than written out, so widening the select is the only way to
+ * widen the type — and narrowing it breaks here rather than at whichever call
+ * site first misses a field.
+ */
+type TradeWithParties = Prisma.TradeGetPayload<{ include: typeof TRADE_WITH_PARTIES }>;
 
 /**
  * Serialize a trade for one specific viewer.

@@ -1,14 +1,31 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { toPublicTrade, toUserSummary } from "../src/serialize";
+import { TRADE_WITH_PARTIES, toPublicTrade, toUserSummary } from "../src/serialize";
 import { prisma, resetDatabase, twoTraders } from "./helpers";
 
-const withParties = {
-  fromUser: true,
-  toUser: true,
-  offeredCard: true,
-  requestedCard: true,
-} as const;
+function tradeData(
+  fromUserId: string,
+  toUserId: string,
+  offeredCardId: string,
+  requestedCardId: string,
+  status: "PENDING" | "ACCEPTED" | "DECLINED"
+) {
+  return {
+    fromUserId,
+    toUserId,
+    offeredCardId,
+    requestedCardId,
+    status,
+    respondedAt: status === "PENDING" ? null : new Date(),
+  };
+}
 
+/**
+ * A trade shaped exactly the way the routes hand one to `toPublicTrade`.
+ *
+ * The include is the serializer's own exported constant rather than a copy, so
+ * these cases cannot go on passing after the real select stops matching what
+ * `toPublicTrade` reads.
+ */
 async function makeTrade(
   fromUserId: string,
   toUserId: string,
@@ -17,15 +34,31 @@ async function makeTrade(
   status: "PENDING" | "ACCEPTED" | "DECLINED" = "PENDING"
 ) {
   return prisma.trade.create({
-    data: {
-      fromUserId,
-      toUserId,
-      offeredCardId,
-      requestedCardId,
-      status,
-      respondedAt: status === "PENDING" ? null : new Date(),
-    },
-    include: withParties,
+    data: tradeData(fromUserId, toUserId, offeredCardId, requestedCardId, status),
+    include: TRADE_WITH_PARTIES,
+  });
+}
+
+/**
+ * The same trade with the parties pulled in whole — `email`, `passwordHash` and
+ * all.
+ *
+ * `TRADE_WITH_PARTIES` selects three user columns precisely so those two never
+ * enter API memory, which means a leak assertion against a row built from it
+ * passes without the serializer doing anything. This is the row that makes the
+ * assertion mean something: the fields are present on the way in, and the
+ * serializer is the only reason they are absent on the way out. It is also the
+ * shape a caller who reached for `include: { fromUser: true }` would produce.
+ */
+async function makeWideTrade(
+  fromUserId: string,
+  toUserId: string,
+  offeredCardId: string,
+  requestedCardId: string
+) {
+  return prisma.trade.create({
+    data: tradeData(fromUserId, toUserId, offeredCardId, requestedCardId, "PENDING"),
+    include: { fromUser: true, toUser: true, offeredCard: true, requestedCard: true },
   });
 }
 
@@ -125,7 +158,9 @@ describe("toPublicTrade", () => {
 
   it("never leaks an email or password hash", async () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
-    const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
+    // Deliberately the wide row: both fields are on the input, so their absence
+    // from the output is the serializer's doing and not the select's.
+    const trade = await makeWideTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
     const serialized = JSON.stringify(toPublicTrade(trade, alice.id, null));
 
