@@ -6,9 +6,11 @@ import {
   copiesOf,
   createUser,
   grant,
+  inFlight,
   prisma,
   resetDatabase,
   twoTraders,
+  waitForLockWaiters,
 } from "./helpers";
 
 /**
@@ -32,8 +34,6 @@ function leaks(body: unknown): boolean {
  * constant would agree with any rewrite of it, including an accidental one.
  */
 const DUPLICATE = "You've already sent this offer. Check your sent requests.";
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 function post(user: { id: string; isAdmin: boolean }, body: Record<string, unknown>) {
   return authedApi(user, "post", "/trades").send(body);
@@ -491,7 +491,7 @@ describe("POST /trades", () => {
       expect(await prisma.trade.count({ where: { status: "PENDING" } })).toBe(1);
     });
 
-    it("lets exactly one of two identical concurrent creates through", async () => {
+    it("answers the same 409 whichever of the two duplicate guards fires", async () => {
       const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
       const body = {
         toUserId: bob.id,
@@ -499,9 +499,13 @@ describe("POST /trades", () => {
         requestedCardId: bobOnly.id,
       };
 
-      // Both requests are in flight before either finishes, so the loser is
-      // rejected either by the application check or by the unique index — the
-      // answer has to be the same 409 either way.
+      // Renamed off "concurrent": `Promise.all` over two supertest requests
+      // mostly runs them end to end, so this cannot promise the second request
+      // was ever inside the first. It does not need to. The point is that the
+      // rule is enforced twice — the handler's `findFirst` and the partial
+      // unique index — and a caller must not be able to tell which one refused
+      // them. The overlapping half, where the index is provably what rejects
+      // it, is the case below.
       const results = await Promise.all([post(alice, body), post(alice, body)]);
 
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
@@ -517,11 +521,16 @@ describe("POST /trades", () => {
       // data — sees nothing and proceeds to INSERT, where it blocks on the
       // partial unique index until this transaction commits and then loses.
       // That is the exact window the P2002 catch exists for.
-      let release!: () => void;
-      const gate = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-
+      //
+      // The readiness is polled, not slept. Two `sleep()`s used to stand in for
+      // "the row has landed" and "the handler has reached its own insert", and
+      // a slow enough machine would release the gate before the handler had
+      // even run its `findFirst` — which then reads the *committed* duplicate
+      // and answers 409 from the application check. Same assertion, wrong path,
+      // no way to tell from the result. `waitForLockWaiters(1)` asserts the
+      // handler is parked on a lock instead of guessing that it is: the only
+      // thing it can be blocked on here is the index entry this transaction
+      // holds.
       const holdingOpen = prisma.$transaction(
         async (tx) => {
           await tx.trade.create({
@@ -532,26 +541,31 @@ describe("POST /trades", () => {
               requestedCardId: bobOnly.id,
             },
           });
-          await gate;
+
+          // `inFlight` adopts supertest's lazy thenable, which is what actually
+          // dispatches the request — assigning it would leave it un-sent, and
+          // then waiting for it to block would wait forever.
+          const inflight = inFlight(
+            post(alice, {
+              toUserId: bob.id,
+              offeredCardId: aliceOnly.id,
+              requestedCardId: bobOnly.id,
+            })
+          );
+          await waitForLockWaiters(1);
+          // Wrapped, not returned bare. An `async` function resolves whatever
+          // it returns, so `return inflight` would make this callback wait for
+          // the very request that is waiting for it to commit — a deadlock
+          // broken only by the test timing out.
+          return { inflight };
         },
         { timeout: 20000, maxWait: 10000 }
       );
 
-      await sleep(200); // let the uncommitted insert land
-      // Promise.resolve adopts supertest's thenable, which is what actually
-      // fires the request — assigning it would leave it un-sent.
-      const inflight = Promise.resolve(
-        post(alice, {
-          toUserId: bob.id,
-          offeredCardId: aliceOnly.id,
-          requestedCardId: bobOnly.id,
-        })
-      );
-      await sleep(400); // let the handler reach its own insert and block there
-      release();
-      await holdingOpen;
-
-      const res = await inflight;
+      // The transaction resolves as soon as the handler is provably blocked,
+      // and resolving is what commits it — which is what releases the handler
+      // into its P2002.
+      const res = await (await holdingOpen).inflight;
       expect(res.status).toBe(409);
       expect(res.body).toEqual({ error: DUPLICATE });
       expect(await prisma.trade.count()).toBe(1);

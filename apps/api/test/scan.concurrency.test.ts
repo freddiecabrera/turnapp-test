@@ -166,11 +166,18 @@ describe("POST /scan under concurrency", () => {
     expect(stored.scannedByUserId).toBe(alice.id);
   });
 
-  it("conserves copies when the scan and the accept race unchoreographed", async () => {
-    // No lock, no pinned ordering: whichever way the two land, the card count
-    // may only move by the one copy the scan collected. This is the shape a
-    // user hits — the cases above are that shape with the interleaving held
-    // still so a regression cannot hide behind a lucky schedule.
+  it("lands the same way whatever order an unpinned scan and accept run in", async () => {
+    // Deliberately **not** a race test, and no longer named as one. Two
+    // supertest requests handed to `Promise.all` mostly run end to end one
+    // after the other, so a case built this way proves nothing about
+    // overlapping — the three above pin the interleaving because they have to.
+    //
+    // What this one is for is the other half: every ordering, overlapping or
+    // sequential, has to reach the same collections. Alice keeps two copies
+    // because she gave one away and scanned one back; bob has the one she gave
+    // him; the card count moved by exactly the copy the scan collected. An
+    // implementation that only balances when the two happen not to overlap
+    // fails here on the runs where they do.
     const { alice, bob, prize, qr, trade } = await tradeAndCode(2);
     const before = await totalCopiesOf(prize.id);
 

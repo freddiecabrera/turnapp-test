@@ -485,7 +485,7 @@ describe("POST /trades/:id/accept", () => {
   });
 
   describe("concurrency", () => {
-    it("lets exactly one of two simultaneous accepts through, and swaps once", async () => {
+    it("answers a repeated accept 409 and swaps once, whichever guard catches it", async () => {
       const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
       const trade = await pendingTrade({
         fromUserId: alice.id,
@@ -494,11 +494,15 @@ describe("POST /trades/:id/accept", () => {
         requestedCardId: bobOnly.id,
       });
 
-      // Both in flight before either finishes. Which guard refuses the loser
-      // depends on the schedule: if its `findUnique` lands after the winner
-      // commits, the pre-transaction status check answers and the transaction
-      // is never entered. Same status, same sentence either way — so this case
-      // pins the outcome, and the one below it pins the path.
+      // `Promise.all` over two supertest requests does not reliably overlap
+      // them — measured on this suite they run end to end, one after the other,
+      // most of the time — so this case is renamed to stop claiming a race it
+      // cannot guarantee. It is still worth keeping, for the property it does
+      // prove: whichever guard refuses the loser, the *answer* is the same.
+      // The readable pre-transaction status check catches it when the first has
+      // already committed; the in-transaction claim catches it when it hasn't.
+      // Same 409, same sentence, one swap, in both. The case below this one is
+      // where the claim is actually put under a second writer.
       const results = await Promise.all([accept(bob, trade.id), accept(bob, trade.id)]);
 
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([200, 409]);
@@ -561,7 +565,7 @@ describe("POST /trades/:id/accept", () => {
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
     });
 
-    it("hands one contested copy to exactly one of two trades accepted at once", async () => {
+    it("refuses the second of two trades queued on the same last copy", async () => {
       const season = await createSeason();
       const prize = await createCard(season.id, "Prize");
       const bobCard = await createCard(season.id, "Bob's");
@@ -589,44 +593,52 @@ describe("POST /trades/:id/accept", () => {
         requestedCardId: carolCard.id,
       });
 
-      // Two different Trade rows, so nothing can short-circuit either request
-      // before its transaction: both claims succeed, and the copy they are both
-      // reaching for is what decides it. `moveCard`'s `quantity: { gte: 1 }`
-      // guard is the only thing standing between this and two copies of a card
-      // there was one of — and this is the only case that runs it concurrently.
-      const [bobRes, carolRes] = await Promise.all([
-        accept(bob, toBob.id),
-        accept(carol, toCarol.id),
-      ]);
+      // Two different Trade rows, so neither request can be short-circuited
+      // before its transaction: both claims succeed, and the single copy they
+      // are both reaching for is the only thing that can separate them. Under
+      // `Promise.all` that contention happened only when the schedule felt like
+      // it — most runs finished bob's request before carol's began, which tests
+      // sequential re-verification, not two writers on one row. Locking the
+      // contested `UserCard` makes the overlap the case rather than the hope.
+      const pending = await withUserCardLocked(alice.id, prize.id, async () => {
+        // Bob's accept claims its own trade and parks inside `moveCard`, on the
+        // decrement of alice's only copy, with nothing committed.
+        const first = inFlight(accept(bob, toBob.id));
+        await waitForLockWaiters(1);
+        // Carol's accept claims *its* trade — a different row, so nothing
+        // blocks it — and queues behind bob on the copy. Postgres hands the row
+        // to the waiters in the order they arrived, so bob wins and carol is
+        // left re-evaluating `quantity: { gte: 1 }` against a row bob has
+        // deleted. That count-zero check is what has to answer here; without it
+        // carol's transaction runs on into the upsert and mints a second copy
+        // of a card there was one of.
+        const second = inFlight(accept(carol, toCarol.id));
+        await waitForLockWaiters(2);
+        return { first, second };
+      });
+      const bobRes = await pending.first;
+      const carolRes = await pending.second;
 
-      expect([bobRes.status, carolRes.status].sort((a, b) => a - b)).toEqual([200, 409]);
-
-      const bobWon = bobRes.status === 200;
-      const winner = bobWon
-        ? { user: bob, card: bobCard, trade: toBob }
-        : { user: carol, card: carolCard, trade: toCarol };
-      const loser = bobWon
-        ? { user: carol, card: carolCard, trade: toCarol, res: carolRes }
-        : { user: bob, card: bobCard, trade: toBob, res: bobRes };
-
+      expect(bobRes.status).toBe(200);
+      expect(carolRes.status).toBe(409);
       // The loser hears about alice's side, not their own: they still hold what
       // they offered, and it is the prize that is gone.
-      expect(loser.res.body).toEqual({ error: SENDER_LOST_IT });
+      expect(carolRes.body).toEqual({ error: SENDER_LOST_IT });
 
       // One copy before, one copy after. Per-user counts say where it went;
       // this says nothing was invented on the way.
       expect(await totalCopiesOf(prize.id)).toBe(1);
-      expect(await copiesOf(winner.user.id, prize.id)).toBe(1);
-      expect(await copiesOf(loser.user.id, prize.id)).toBe(0);
+      expect(await copiesOf(bob.id, prize.id)).toBe(1);
+      expect(await copiesOf(carol.id, prize.id)).toBe(0);
       expect(await hasRowFor(alice.id, prize.id)).toBe(false);
 
-      // The loser's half of the swap unwound with it, and their trade is still
+      // Carol's half of the swap unwound with it, and her trade is still
       // pending — nothing a human did to it.
-      expect(await copiesOf(loser.user.id, loser.card.id)).toBe(1);
-      expect(await copiesOf(alice.id, loser.card.id)).toBe(0);
-      expect(await copiesOf(alice.id, winner.card.id)).toBe(1);
-      expect((await storedTrade(winner.trade.id)).status).toBe("ACCEPTED");
-      expect((await storedTrade(loser.trade.id)).status).toBe("PENDING");
+      expect(await copiesOf(carol.id, carolCard.id)).toBe(1);
+      expect(await copiesOf(alice.id, carolCard.id)).toBe(0);
+      expect(await copiesOf(alice.id, bobCard.id)).toBe(1);
+      expect((await storedTrade(toBob.id)).status).toBe("ACCEPTED");
+      expect((await storedTrade(toCarol.id)).status).toBe("PENDING");
     });
   });
 
