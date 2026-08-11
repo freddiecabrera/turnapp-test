@@ -1,6 +1,8 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import supertest from "supertest";
 import { signToken } from "../src/auth";
+import { app } from "../src/app";
 import { TEST_DATABASE_URL } from "./env";
 
 /**
@@ -116,6 +118,30 @@ export async function hasRowFor(userId: string, cardId: string): Promise<boolean
 
 export function authHeaderFor(user: { id: string; isAdmin: boolean }) {
   return `Bearer ${signToken({ userId: user.id, isAdmin: user.isAdmin })}`;
+}
+
+/**
+ * HTTP client for the real Express app, in-process.
+ *
+ * supertest binds an ephemeral port per request and closes it afterwards, so
+ * this neither needs nor collides with a dev server on 4000. The app itself is
+ * importable because `src/app.ts` only builds it — `src/index.ts` is what calls
+ * `listen`.
+ *
+ * Requests go through the app's own `prisma` client, which reads DATABASE_URL
+ * from the environment vitest.config.ts gives the workers: the test database.
+ */
+export const api = () => supertest(app);
+
+type HttpMethod = "get" | "post" | "put" | "patch" | "delete";
+
+/** `api()` with this user's bearer token already attached. */
+export function authedApi(
+  user: { id: string; isAdmin: boolean },
+  method: HttpMethod,
+  url: string
+) {
+  return api()[method](url).set("Authorization", authHeaderFor(user));
 }
 
 /**

@@ -1,5 +1,13 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { prisma, resetDatabase, twoTraders, copiesOf, hasRowFor } from "./helpers";
+import {
+  api,
+  authedApi,
+  copiesOf,
+  hasRowFor,
+  prisma,
+  resetDatabase,
+  twoTraders,
+} from "./helpers";
 import { DEV_DATABASE_URL } from "./env";
 
 /**
@@ -51,5 +59,49 @@ describe("test harness", () => {
     expect(await prisma.user.count()).toBe(0);
     expect(await prisma.card.count()).toBe(0);
     expect(await prisma.trade.count()).toBe(0);
+  });
+});
+
+/**
+ * The HTTP path: the real Express app, driven in-process. Proves the routing
+ * stack, the auth middleware, and the app's own Prisma client all reach the
+ * test database, so route tests can be written against behaviour rather than
+ * against handlers called directly.
+ */
+describe("http harness", () => {
+  beforeEach(resetDatabase);
+
+  it("serves an unauthenticated GET /health", async () => {
+    const res = await api().get("/health");
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("rejects GET /cards without a token", async () => {
+    const res = await api().get("/cards");
+
+    expect(res.status).toBe(401);
+  });
+
+  it("serves GET /cards for a signed-in user, from the test database", async () => {
+    const { alice, common, bobOnly } = await twoTraders();
+
+    const res = await authedApi(alice, "get", "/cards");
+    expect(res.status).toBe(200);
+
+    const cards = res.body as Array<{ id: string; owned: boolean; quantity: number }>;
+
+    // Exactly the four cards this test created. The dev database has fifteen
+    // seeded ones, so the count alone proves which database served the request.
+    expect(cards).toHaveLength(4);
+    expect(cards.find((c) => c.id === common.id)).toMatchObject({
+      owned: true,
+      quantity: 1,
+    });
+    expect(cards.find((c) => c.id === bobOnly.id)).toMatchObject({
+      owned: false,
+      quantity: 0,
+    });
   });
 });
