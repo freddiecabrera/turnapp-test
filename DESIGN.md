@@ -297,6 +297,13 @@ Mount order matters. `appRouter` is mounted at `/` and applies `requireAuth` to 
 reaches it, so a router mounted after it never sees its own requests. Both new routers mount
 first.
 
+Both new routers are built with `asyncRouter()` rather than `express.Router()`. Express 4 drops
+a handler's returned promise on the floor, so a rejection inside an `async` route is an
+unhandled rejection — which Node 20 turns into a process exit. `asyncRouter` wraps every handler
+at registration so the rejection reaches the error middleware instead. It is not specific to
+trading: the existing routers were switched to it too, because `GET /cards?seasonId=…` had the
+same exposure.
+
 | Method | Path | Purpose |
 | --- | --- | --- |
 | `GET` | `/trades` | The board: every trade involving me, both directions |

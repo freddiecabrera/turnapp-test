@@ -1,5 +1,5 @@
-import { Router } from "express";
 import type { OwnedCard, UserSummary } from "@turnapp/shared";
+import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
 import { toPublicCard, toUserSummary } from "../serialize";
@@ -14,7 +14,7 @@ import { toPublicCard, toUserSummary } from "../serialize";
  * auth posture though — the router is entirely behind `requireAuth`, and the
  * caller is always `req.auth.userId`, never anything from the request.
  */
-export const usersRouter = Router();
+export const usersRouter = asyncRouter();
 
 usersRouter.use(requireAuth);
 
