@@ -319,9 +319,18 @@ Two honest ways to make it a 409, both declined here:
 
 Until then the table says what the code does.
 
-**Mirror trades** (A offers X for Y while B offers Y for X) are legal, and accepting both
-swaps the cards and then swaps them back. Not a bug — but it means "trade completed" does not
-imply "state changed."
+**Mirror trades** (A offers X for Y while B offers Y for X) are legal, and the pair reaches
+accept intact: the partial unique index keys on `(fromUserId, toUserId, offeredCardId,
+requestedCardId)` and the two rows disagree on all four. What they cannot do is swap the cards
+and then swap them back. The offered card always moves *from* `fromUser`, so alice's accept
+hands X to bob and takes Y from him — which leaves bob without the Y his own trade offers.
+Measured: first accept `200`, second `409`. The cards swap exactly once and stay swapped.
+
+Nothing marks the second trade dead when the first completes — sibling trades are deliberately
+not cascaded — so it is the accept-time ownership check that catches it, which is the case that
+check exists for. Accepted concurrently, exactly one succeeds and the loser is refused with the
+`409`, or with the `500` of the deadlock row above when Postgres resolves the two lock orders by
+aborting one.
 
 ---
 
