@@ -31,15 +31,28 @@ async function makeTrade(
 
 describe("toUserSummary", () => {
   it("exposes only id, username and userIdNumber", () => {
-    const summary = toUserSummary({
+    // Bound to a variable first, on purpose. `toUserSummary` takes a
+    // `Pick<PrismaUser, ...>`, and a fresh object literal handed straight to it
+    // trips TypeScript's excess-property check on `email` and `passwordHash` —
+    // which is the scenario under test, not something to design out. Binding
+    // loses that freshness and the call is accepted structurally, with every
+    // field still checked: `userIdNumber: "900001"` here is still a compile
+    // error. `as never` also silenced the excess-property check, but it is
+    // assignable to everything, so it silenced that one too.
+    const fullRow = {
       id: "u1",
       username: "alice",
       userIdNumber: 900001,
-      // Extra fields a caller might pass in by accident.
+      // The two fields the serializer exists to drop.
       email: "alice@test.local",
       passwordHash: "hunter2",
-    } as never);
+    };
 
+    const summary = toUserSummary(fullRow);
+
+    // `Pick<>` narrows what the signature asks for, not what arrives: the
+    // hand-written field copy inside `toUserSummary` is the only thing keeping
+    // the extra two from coming back out.
     expect(summary).toEqual({ id: "u1", username: "alice", userIdNumber: 900001 });
     expect(Object.keys(summary)).toHaveLength(3);
   });
