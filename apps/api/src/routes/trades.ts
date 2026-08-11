@@ -312,7 +312,9 @@ async function moveCard(
  *
  * The checks above the transaction are for a readable answer, not for
  * correctness — by the time they return, all three could be stale. The claim
- * inside is the one that decides.
+ * inside is the one that decides, and it carries both of the preconditions it
+ * can carry: the trade is still pending, and it is still addressed to the
+ * person answering it.
  */
 tradesRouter.post("/:id/accept", async (req, res) => {
   const viewerId = req.auth!.userId;
@@ -348,8 +350,15 @@ tradesRouter.post("/:id/accept", async (req, res) => {
     const accepted = await prisma.$transaction(async (tx) => {
       // Claim first. Whoever flips PENDING wins; a second accept sees count 0
       // and unwinds before it can move anything.
+      //
+      // `toUserId` is in the filter as well as `status`. The 403 above reads
+      // the trade in a query of its own, so this statement is the only point
+      // where "the person accepting is the recipient" can be true of the row
+      // actually being written. Filtering on `status` alone is safe only while
+      // `toUserId` never changes — a property of today's codebase, not of this
+      // code, and not one the statement that authorises a swap should lean on.
       const claim = await tx.trade.updateMany({
-        where: { id: trade.id, status: "PENDING" },
+        where: { id: trade.id, status: "PENDING", toUserId: viewerId },
         data: { status: "ACCEPTED", respondedAt: new Date() },
       });
       if (claim.count === 0) throw new TradeError(409, ALREADY_ANSWERED);
