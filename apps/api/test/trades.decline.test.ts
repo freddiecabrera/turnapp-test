@@ -7,6 +7,7 @@ import {
   createUser,
   prisma,
   resetDatabase,
+  totalCopiesEverywhere,
   twoTraders,
 } from "./helpers";
 
@@ -494,6 +495,8 @@ describe("POST /trades/:id/decline", () => {
       // be arranged rather than hoped for. What separates them at that point is
       // the guarded claim and nothing else: the loser's `updateMany` re-reads
       // under the lock, finds the row no longer PENDING, and matches nothing.
+      const totalBefore = await totalCopiesEverywhere();
+
       const results = await racedOnTheSameTrade(trade.id, () => [
         decline(bob, trade.id),
         decline(bob, trade.id),
@@ -504,6 +507,7 @@ describe("POST /trades/:id/decline", () => {
       expect((await storedTrade(trade.id)).status).toBe("DECLINED");
       expect(await prisma.trade.count({ where: { status: "DECLINED" } })).toBe(1);
       expect(await allHoldings()).toEqual(before);
+      expect(await totalCopiesEverywhere()).toBe(totalBefore);
     }, 20_000);
 
     it("lets exactly one of a simultaneous accept and decline through", async () => {
@@ -519,6 +523,8 @@ describe("POST /trades/:id/decline", () => {
       // Gated the same way, so both requests have read the trade PENDING before
       // either can write. Accept then claims inside its transaction and decline
       // claims outside one, and they contend on the same row either way.
+      const totalBefore = await totalCopiesEverywhere();
+
       const [accepted, declined] = await racedOnTheSameTrade(trade.id, () => [
         accept(bob, trade.id),
         decline(bob, trade.id),
@@ -529,6 +535,10 @@ describe("POST /trades/:id/decline", () => {
       // failure mode this catches is a decline that lands on top of an accept
       // and leaves the trade DECLINED with the cards already swapped.
       expect([accepted.status, declined.status].sort((a, b) => a - b)).toEqual([200, 409]);
+      // Whichever answer won, and whether or not cards moved, the number of
+      // copies in existence is the same. This holds across both branches
+      // below, which is exactly why it is asserted before the branch.
+      expect(await totalCopiesEverywhere()).toBe(totalBefore);
       const stored = await storedTrade(trade.id);
 
       if (accepted.status === 200) {

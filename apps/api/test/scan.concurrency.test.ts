@@ -10,6 +10,7 @@ import {
   inFlight,
   prisma,
   resetDatabase,
+  totalCopiesEverywhere,
   totalCopiesOf,
   waitForLockWaiters,
   withUserCardLocked,
@@ -73,6 +74,7 @@ describe("POST /scan under concurrency", () => {
     await grant(alice.id, card.id, 1);
     const first = await createQrCode(card.id, "QR-ONE");
     const second = await createQrCode(card.id, "QR-TWO");
+    const before = await totalCopiesEverywhere();
 
     // Two codes, so nothing serialises them but the row they both increment.
     const pending = await withUserCardLocked(alice.id, card.id, async () => {
@@ -92,6 +94,9 @@ describe("POST /scan under concurrency", () => {
     // earlier read makes the second write 2 over the first's 2.
     expect(await copiesOf(alice.id, card.id)).toBe(3);
     expect(await totalCopiesOf(card.id)).toBe(3);
+    // Two codes redeemed, so the world holds exactly two more copies than it
+    // did. Scanning is the one operation allowed to move this number at all.
+    expect(await totalCopiesEverywhere()).toBe(before + 2);
     expect([a.body.card.quantity, b.body.card.quantity].sort()).toEqual([2, 3]);
 
     // One row, and both codes spent — a lost update that also lost a code
@@ -103,6 +108,7 @@ describe("POST /scan under concurrency", () => {
   it("mints exactly one copy when a scan lands on the row an accept is moving", async () => {
     const { alice, bob, prize, back, qr, trade } = await tradeAndCode(2);
     expect(await totalCopiesOf(prize.id)).toBe(2);
+    const before = await totalCopiesEverywhere();
 
     const pending = await withUserCardLocked(alice.id, prize.id, async () => {
       // The accept claims the trade and parks inside `moveCard`, on the
@@ -128,6 +134,9 @@ describe("POST /scan under concurrency", () => {
     expect(await totalCopiesOf(prize.id)).toBe(3);
     expect(await copiesOf(alice.id, prize.id)).toBe(2);
     expect(await copiesOf(bob.id, prize.id)).toBe(1);
+    // The accept only moved copies about; the scan added the one it collected.
+    // Four here — the lost update's answer — is a card invented from nothing.
+    expect(await totalCopiesEverywhere()).toBe(before + 1);
 
     // The trade's other half is untouched by any of this.
     expect(await copiesOf(alice.id, back.id)).toBe(1);
@@ -140,6 +149,7 @@ describe("POST /scan under concurrency", () => {
     // into a 500 for an honest user; by (userId, cardId) it is an insert.
     const { alice, bob, prize, qr, trade } = await tradeAndCode(1);
     expect(await totalCopiesOf(prize.id)).toBe(1);
+    const before = await totalCopiesEverywhere();
 
     const pending = await withUserCardLocked(alice.id, prize.id, async () => {
       const accepted = inFlight(accept(bob, trade.id));
@@ -158,6 +168,7 @@ describe("POST /scan under concurrency", () => {
     expect(await totalCopiesOf(prize.id)).toBe(2);
     expect(await copiesOf(alice.id, prize.id)).toBe(1);
     expect(await copiesOf(bob.id, prize.id)).toBe(1);
+    expect(await totalCopiesEverywhere()).toBe(before + 1);
 
     // A 500 here rolled the whole scan back, which is data-safe and still
     // costs the user their code: it stayed unscanned and unusable.
@@ -180,6 +191,7 @@ describe("POST /scan under concurrency", () => {
     // fails here on the runs where they do.
     const { alice, bob, prize, qr, trade } = await tradeAndCode(2);
     const before = await totalCopiesOf(prize.id);
+    const beforeEverywhere = await totalCopiesEverywhere();
 
     const [accepted, scanned] = await Promise.all([
       accept(bob, trade.id),
@@ -189,6 +201,7 @@ describe("POST /scan under concurrency", () => {
     expect(accepted.status).toBe(200);
     expect(scanned.status).toBe(200);
     expect(await totalCopiesOf(prize.id)).toBe(before + 1);
+    expect(await totalCopiesEverywhere()).toBe(beforeEverywhere + 1);
     expect(await copiesOf(bob.id, prize.id)).toBe(1);
     expect(await copiesOf(alice.id, prize.id)).toBe(2);
   });

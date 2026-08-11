@@ -12,6 +12,7 @@ import {
   inFlight,
   prisma,
   resetDatabase,
+  totalCopiesEverywhere,
   totalCopiesOf,
   twoTraders,
   waitForLockWaiters,
@@ -493,6 +494,7 @@ describe("POST /trades/:id/accept", () => {
         offeredCardId: aliceOnly.id,
         requestedCardId: bobOnly.id,
       });
+      const before = await totalCopiesEverywhere();
 
       // `Promise.all` over two supertest requests does not reliably overlap
       // them — measured on this suite they run end to end, one after the other,
@@ -515,6 +517,10 @@ describe("POST /trades/:id/accept", () => {
       expect(await copiesOf(bob.id, bobOnly.id)).toBe(0);
       expect(await copiesOf(alice.id, bobOnly.id)).toBe(1);
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+      // A swap relocates copies and creates none. Two swaps of the same trade
+      // would leave this two higher, which no per-user count above can see
+      // without somebody having predicted which pair of rows to look at.
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
 
     it("refuses a second accept that reached its claim while the first held it", async () => {
@@ -534,6 +540,7 @@ describe("POST /trades/:id/accept", () => {
         offeredCardId: mine.id,
         requestedCardId: yours.id,
       });
+      const before = await totalCopiesEverywhere();
 
       const pending = await withUserCardLocked(alice.id, mine.id, async () => {
         // The first accept claims the trade and then parks inside `moveCard`,
@@ -563,6 +570,7 @@ describe("POST /trades/:id/accept", () => {
       expect(await copiesOf(bob.id, yours.id)).toBe(1);
       expect(await copiesOf(alice.id, yours.id)).toBe(1);
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
 
     it("refuses the second of two trades queued on the same last copy", async () => {
@@ -592,6 +600,7 @@ describe("POST /trades/:id/accept", () => {
         offeredCardId: prize.id,
         requestedCardId: carolCard.id,
       });
+      const before = await totalCopiesEverywhere();
 
       // Two different Trade rows, so neither request can be short-circuited
       // before its transaction: both claims succeed, and the single copy they
@@ -639,6 +648,9 @@ describe("POST /trades/:id/accept", () => {
       expect(await copiesOf(alice.id, bobCard.id)).toBe(1);
       expect((await storedTrade(toBob.id)).status).toBe("ACCEPTED");
       expect((await storedTrade(toCarol.id)).status).toBe("PENDING");
+      // Carol's transaction rolled back whole, so nothing it touched survives
+      // in either direction — including the increment it had not reached.
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
   });
 

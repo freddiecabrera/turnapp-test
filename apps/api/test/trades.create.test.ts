@@ -9,6 +9,7 @@ import {
   inFlight,
   prisma,
   resetDatabase,
+  totalCopiesEverywhere,
   twoTraders,
   waitForLockWaiters,
 } from "./helpers";
@@ -506,15 +507,21 @@ describe("POST /trades", () => {
       // unique index — and a caller must not be able to tell which one refused
       // them. The overlapping half, where the index is provably what rejects
       // it, is the case below.
+      const before = await totalCopiesEverywhere();
+
       const results = await Promise.all([post(alice, body), post(alice, body)]);
 
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([201, 409]);
       expect(results.find((r) => r.status === 409)!.body).toEqual({ error: DUPLICATE });
       expect(await prisma.trade.count()).toBe(1);
+      // An offer is a promise, not a transfer: neither the accepted request nor
+      // the refused one may have moved a copy anywhere.
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
 
     it("answers 409, not 500, when the unique index is what rejects it", async () => {
       const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const before = await totalCopiesEverywhere();
 
       // Force the race rather than hope for it. An identical PENDING row is
       // held uncommitted, so the handler's duplicate check — reading committed
@@ -569,6 +576,7 @@ describe("POST /trades", () => {
       expect(res.status).toBe(409);
       expect(res.body).toEqual({ error: DUPLICATE });
       expect(await prisma.trade.count()).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
   });
 

@@ -131,6 +131,34 @@ export async function totalCopiesOf(cardId: string): Promise<number> {
   return _sum.quantity ?? 0;
 }
 
+/**
+ * Every copy of every card held by anyone, as one number.
+ *
+ * **The conservation invariant.** A trade moves copies between collections; it
+ * may never create or destroy one, so this total reads the same before and
+ * after any number of accepts, declines and refusals. `POST /scan` is the only
+ * endpoint entitled to change it, and only by exactly one per code redeemed.
+ *
+ * It earns its own helper because it is the assertion that does not have to
+ * know what the bug was. Per-user counts describe an outcome somebody had to
+ * predict correctly in order to assert it; this one fails on any defect that
+ * makes a copy appear or vanish — a lost update, a rollback that unwound only
+ * half a swap, a decrement written back over somebody else's increment. The
+ * `POST /scan` duplication bug was exactly that shape, and it is what a
+ * status-code assertion and a single-user quantity assertion can both miss.
+ * `totalCopiesOf` is the same idea narrowed to one card: reach for this one
+ * when an operation touches two, which every trade does.
+ *
+ * Read it before the operation and again after, and compare — rather than
+ * asserting a literal. The fixtures decide the starting number, so a hardcoded
+ * one has to be edited whenever a fixture gains a card, and that is how an
+ * assertion ends up quietly "corrected" to whatever the bug produced.
+ */
+export async function totalCopiesEverywhere(): Promise<number> {
+  const { _sum } = await prisma.userCard.aggregate({ _sum: { quantity: true } });
+  return _sum.quantity ?? 0;
+}
+
 /** A single-use QR code granting `cardId`. */
 export async function createQrCode(cardId: string, code: string, pointsAwarded = 50) {
   return prisma.qrCode.create({ data: { code, cardId, pointsAwarded } });
