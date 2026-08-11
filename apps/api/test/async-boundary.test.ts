@@ -1,4 +1,7 @@
+import express from "express";
+import supertest from "supertest";
 import { beforeEach, describe, expect, it } from "vitest";
+import { asyncRouter } from "../src/async-router";
 import { api, authedApi, createUser, resetDatabase, twoTraders } from "./helpers";
 
 /**
@@ -178,5 +181,92 @@ describe("error middleware response body", () => {
     expect(messages[0]).toBeTruthy();
 
     await expectStillServing();
+  });
+});
+
+/**
+ * The other form Express accepts a handler in.
+ *
+ * `router.get(path, [h1, h2])` is as valid as `router.get(path, h1)`, and for a
+ * wrapper whose whole claim is that the boundary cannot be forgotten, a
+ * registration form it silently skips is the way to forget it. `wrap` returned
+ * anything that wasn't a function untouched, so every handler inside an array
+ * went in raw: the request hung with no response at all and the rejection went
+ * unhandled, which on Node 20's default `--unhandled-rejections=throw` is the
+ * process exiting.
+ *
+ * No route in this app registers handlers that way, so this cannot go through a
+ * shipped route the way the cases above do — it needs its own router. That is
+ * also why it is worth pinning: nothing else would notice the day somebody adds
+ * `[requireSomething, handler]` to a real route.
+ */
+describe("async error boundary, array-form handlers", () => {
+  /** Stands in for `app.ts`'s fixed sentence; only its presence is asserted. */
+  const PROBE_500 = "Something went wrong on our end. Please try again.";
+
+  /**
+   * A throwaway app around one array-form route, plus `/health` and the same
+   * shape of error middleware `app.ts` ends with.
+   *
+   * The handlers are given by the caller so one case can register two of them
+   * and watch the order they run in.
+   */
+  function appWith(...handlers: express.RequestHandler[]) {
+    const app = express();
+    const router = asyncRouter();
+
+    router.get("/boom", handlers);
+
+    app.use("/", router);
+    app.get("/health", (_req, res) => res.json({ ok: true }));
+    app.use(
+      (_err: Error, _req: express.Request, res: express.Response, _next: express.NextFunction) =>
+        res.status(500).json({ error: PROBE_500 })
+    );
+
+    return supertest(app);
+  }
+
+  const rejects = (message: string): express.RequestHandler => async () => {
+    throw new Error(message);
+  };
+
+  it("turns a rejection inside an array-form handler into a JSON 500", async () => {
+    // Unwrapped, this request is answered by nobody: it hangs until the test
+    // times out, and the rejection escapes to the process.
+    const res = await appWith(rejects("array-form handler rejected")).get("/boom");
+
+    expectJson500(res);
+  });
+
+  it("leaves the server answering afterwards", async () => {
+    const client = appWith(rejects("array-form handler rejected"));
+
+    await client.get("/boom");
+
+    const ok = await client.get("/health");
+    expect(ok.status).toBe(200);
+    expect(ok.body).toEqual({ ok: true });
+  });
+
+  it("wraps every handler in the array, not just the first", async () => {
+    const reached: string[] = [];
+
+    const client = appWith(
+      async (_req, _res, next) => {
+        reached.push("first");
+        next();
+      },
+      async () => {
+        reached.push("second");
+        throw new Error("second handler rejected");
+      }
+    );
+
+    const res = await client.get("/boom");
+
+    // A `.map(wrap)` that stopped at index 0 would leave this one raw.
+    expect(reached).toEqual(["first", "second"]);
+    expectJson500(res);
   });
 });
