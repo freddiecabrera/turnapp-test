@@ -97,6 +97,74 @@ function storedTrade(id: string) {
   return prisma.trade.findUniqueOrThrow({ where: { id } });
 }
 
+/**
+ * Block until `n` connections are parked waiting for a lock on `Trade`.
+ *
+ * Runs on the pool rather than inside the caller's transaction, so it can see
+ * what that transaction is blocking. Throws rather than returning quietly if
+ * the writers never arrive — a readiness check that gives up silently turns
+ * into a test that passes because nothing happened.
+ */
+async function waitForBlockedTradeWriters(n: number, timeoutMs = 8_000) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const [row] = await prisma.$queryRaw<Array<{ blocked: number }>>`
+      SELECT count(*)::int AS blocked
+      FROM pg_stat_activity
+      WHERE datname = current_database()
+        AND state = 'active'
+        AND wait_event_type = 'Lock'
+        AND query ILIKE '%"Trade"%'
+    `;
+    if (row.blocked >= n) return;
+    if (Date.now() > deadline) {
+      throw new Error(`only ${row.blocked} of ${n} writers reached the Trade row lock`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+}
+
+/**
+ * Hold a row lock on one trade, start some requests against it, and let them go
+ * only once every one of them has reached its first write.
+ *
+ * This exists because `Promise.all` over two supertest requests does **not**
+ * reliably interleave. Measured on this suite, two simultaneous declines run
+ * end-to-end one after the other about four times in five — the second request
+ * re-reads the trade after the first has already answered it, so it takes the
+ * readable pre-check and never reaches the guarded claim at all. A concurrency
+ * test built that way agrees with an implementation that has no claim guard,
+ * roughly 80% of the time, which is the worst thing a test can do.
+ *
+ * `SELECT … FOR UPDATE` fixes the schedule instead of hoping for one. Plain
+ * reads are unaffected by a row lock under MVCC, so every request gets to
+ * finish its lookup and see the trade PENDING; none can get past its `UPDATE`
+ * until this transaction commits. By the time the lock is released, all of them
+ * have made the decision the guard is supposed to arbitrate, and the guard is
+ * the only thing left that can separate them.
+ *
+ * `Promise.resolve` around each request is not ceremony. A supertest `Test` is
+ * a lazy thenable — it sends nothing until something subscribes to it — so
+ * building the array does not start the requests, and waiting for them to reach
+ * a lock they have not yet gone looking for waits forever. Adopting each one
+ * here is what dispatches it.
+ */
+async function racedOnTheSameTrade<T>(
+  tradeId: string,
+  start: () => Array<PromiseLike<T>>
+): Promise<T[]> {
+  let inFlight: Array<Promise<T>> = [];
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Trade" WHERE id = ${tradeId} FOR UPDATE`;
+      inFlight = start().map((request) => Promise.resolve(request));
+      await waitForBlockedTradeWriters(inFlight.length);
+    },
+    { timeout: 20_000, maxWait: 10_000 }
+  );
+  return Promise.all(inFlight);
+}
+
 describe("POST /trades/:id/decline", () => {
   beforeEach(resetDatabase);
 
@@ -421,17 +489,22 @@ describe("POST /trades/:id/decline", () => {
       });
       const before = await allHoldings();
 
-      // Both in flight before either finishes. The loser contends on the Trade
-      // row inside the guarded claim, blocks, re-reads, and finds the row is no
-      // longer PENDING.
-      const results = await Promise.all([decline(bob, trade.id), decline(bob, trade.id)]);
+      // Both requests get past their lookup, both see PENDING, and only then is
+      // either allowed to write — see `racedOnTheSameTrade` for why that has to
+      // be arranged rather than hoped for. What separates them at that point is
+      // the guarded claim and nothing else: the loser's `updateMany` re-reads
+      // under the lock, finds the row no longer PENDING, and matches nothing.
+      const results = await racedOnTheSameTrade(trade.id, () => [
+        decline(bob, trade.id),
+        decline(bob, trade.id),
+      ]);
 
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([200, 409]);
       expect(results.find((r) => r.status === 409)!.body).toEqual({ error: ALREADY_ANSWERED });
       expect((await storedTrade(trade.id)).status).toBe("DECLINED");
       expect(await prisma.trade.count({ where: { status: "DECLINED" } })).toBe(1);
       expect(await allHoldings()).toEqual(before);
-    });
+    }, 20_000);
 
     it("lets exactly one of a simultaneous accept and decline through", async () => {
       const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
@@ -443,7 +516,10 @@ describe("POST /trades/:id/decline", () => {
       });
       const before = await allHoldings();
 
-      const [accepted, declined] = await Promise.all([
+      // Gated the same way, so both requests have read the trade PENDING before
+      // either can write. Accept then claims inside its transaction and decline
+      // claims outside one, and they contend on the same row either way.
+      const [accepted, declined] = await racedOnTheSameTrade(trade.id, () => [
         accept(bob, trade.id),
         decline(bob, trade.id),
       ]);
@@ -465,7 +541,7 @@ describe("POST /trades/:id/decline", () => {
         expect(stored.status).toBe("DECLINED");
         expect(await allHoldings()).toEqual(before);
       }
-    });
+    }, 20_000);
   });
 
   describe("declining releases the offer", () => {
