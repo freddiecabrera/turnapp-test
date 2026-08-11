@@ -88,9 +88,12 @@ type TradeWithParties = PrismaTrade & {
  * answered". Pass the computed value, or an explicit null to say you didn't
  * compute it. Answered trades are forced to null either way.
  *
- * Throws for a viewer who is neither party. NOTE: Express 4 does not route
- * async rejections to the error middleware, so an uncaught throw here exits the
- * process. Callers must catch it — see the trading routes.
+ * Throws for a viewer who is neither party. `asyncRouter` now carries that
+ * rejection to the error middleware, which logs it and answers a generic JSON
+ * 500 — it no longer exits the process, and the message naming the trade and
+ * viewer stays in the server log rather than going to the client. That is a
+ * safe landing, not a licence: a 500 means a request was refused that should
+ * have worked. Routes filter by participant so this never fires.
  */
 export function toPublicTrade(
   trade: TradeWithParties,
