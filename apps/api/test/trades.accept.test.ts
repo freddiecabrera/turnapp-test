@@ -655,6 +655,116 @@ describe("POST /trades/:id/accept", () => {
   });
 
   /**
+   * Mirror trades: alice offers X for Y while bob offers Y for X.
+   *
+   * Both are legal at creation — `POST /trades` has a case for that — and the
+   * unique index does not touch them, because it keys on `(fromUserId,
+   * toUserId, offeredCardId, requestedCardId)` and the two rows disagree on
+   * every one of those columns. So the pair reaches accept intact, and the two
+   * trades are then competing for the same two copies from opposite ends.
+   *
+   * **This contradicts DESIGN.md.** The edge-case section says accepting both
+   * "swaps the cards and then swaps them back". It cannot: the offered card
+   * always moves *from* `fromUser`, so once alice's accept has handed X to bob
+   * and taken Y from him, bob no longer holds the Y his own trade offers, and
+   * `moveCard`'s guard refuses the second accept with the 409 it refuses any
+   * vanished card with. The cards are swapped exactly once and stay swapped.
+   * Both tests below assert what actually happens; the design note is the thing
+   * that is wrong, not the code, and the outcome it describes ("trade completed
+   * does not imply state changed") never arises.
+   */
+  describe("mirror trades", () => {
+    /** alice offers `aliceOnly` for `bobOnly`; bob offers `bobOnly` for `aliceOnly`. */
+    async function mirrored() {
+      const fixtures = await twoTraders();
+      const { alice, bob, aliceOnly, bobOnly } = fixtures;
+      const aliceOffers = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const bobOffers = await pendingTrade({
+        fromUserId: bob.id,
+        toUserId: alice.id,
+        offeredCardId: bobOnly.id,
+        requestedCardId: aliceOnly.id,
+      });
+      return { ...fixtures, aliceOffers, bobOffers };
+    }
+
+    it("refuses the second, whose offered card the first already moved", async () => {
+      const { alice, bob, aliceOnly, bobOnly, aliceOffers, bobOffers } = await mirrored();
+      const before = await totalCopiesEverywhere();
+
+      const first = await accept(bob, aliceOffers.id);
+      expect(first.status).toBe(200);
+
+      // Bob's trade still offers `bobOnly`, which he handed to alice a moment
+      // ago. Nothing marked it unfulfillable — sibling trades are deliberately
+      // not cascaded — so it is the accept-time ownership check that catches
+      // it, which is the entire reason ownership is re-verified here.
+      const second = await accept(alice, bobOffers.id);
+      expect(second.status).toBe(409);
+      expect(second.body).toEqual({ error: SENDER_LOST_IT });
+
+      // Swapped once and left swapped.
+      expect(await copiesOf(alice.id, aliceOnly.id)).toBe(0);
+      expect(await copiesOf(bob.id, aliceOnly.id)).toBe(1);
+      expect(await copiesOf(bob.id, bobOnly.id)).toBe(0);
+      expect(await copiesOf(alice.id, bobOnly.id)).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
+
+      expect((await storedTrade(aliceOffers.id)).status).toBe("ACCEPTED");
+      expect((await storedTrade(bobOffers.id)).status).toBe("PENDING");
+    });
+
+    it("reaches the same collections whichever mirror wins, and conserves every copy", async () => {
+      // Not pinned, and not claiming to be: an ordering-independent invariant
+      // is the only thing worth asserting here, because the orderings genuinely
+      // differ in what they answer. Run unchoreographed, the two transactions
+      // take the same two `UserCard` rows in opposite orders, so Postgres
+      // sometimes resolves this by deadlock detection — DESIGN.md's edge-case
+      // table has that row, and the aborted transaction surfaces as a 500
+      // rather than a 409 because Prisma 5.22 does not map `40P01` to a code
+      // the route could branch on. Measured over six runs it was a 500 four
+      // times and a 409 twice.
+      //
+      // What does not vary: exactly one accept succeeds, and the cards end up
+      // in the same place either way — the two trades describe the same swap
+      // from opposite ends, so whichever commits produces the same collections.
+      // A 500 that had half-applied a swap, or a deadlock loser that had
+      // committed its decrement, would both land here.
+      const { alice, bob, aliceOnly, bobOnly, aliceOffers, bobOffers } = await mirrored();
+      const before = await totalCopiesEverywhere();
+
+      const [fromAlice, fromBob] = await Promise.all([
+        accept(bob, aliceOffers.id),
+        accept(alice, bobOffers.id),
+      ]);
+
+      const statuses = [fromAlice.status, fromBob.status];
+      expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+      // The loser is refused, however Postgres got there. Both are honest
+      // answers to "somebody else took that copy"; only the 409 is the one the
+      // caller can act on, which is why DESIGN.md files the 500 as a defect in
+      // what the loser is told rather than in what happened.
+      expect([409, 500]).toContain(statuses.find((s) => s !== 200));
+
+      expect(await copiesOf(alice.id, aliceOnly.id)).toBe(0);
+      expect(await copiesOf(bob.id, aliceOnly.id)).toBe(1);
+      expect(await copiesOf(bob.id, bobOnly.id)).toBe(0);
+      expect(await copiesOf(alice.id, bobOnly.id)).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
+
+      // Exactly one trade was answered; the refused one is still PENDING,
+      // because nothing a human did to it.
+      expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+      expect(await prisma.trade.count({ where: { status: "PENDING" } })).toBe(1);
+    });
+  });
+
+  /**
    * The same contention, answered one request at a time.
    *
    * Nothing here overlaps — each accept has finished before the next begins —

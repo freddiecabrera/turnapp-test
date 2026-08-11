@@ -580,6 +580,117 @@ describe("POST /trades", () => {
     });
   });
 
+  /**
+   * The same three rules, asserted against the schema instead of the handler.
+   *
+   * DESIGN.md calls this belt and braces: the CHECK constraints and the partial
+   * unique index are the guarantee, and the route's 400s and 409s are what turn
+   * a violation into a sentence a person can read. Every case above goes
+   * through `POST /trades`, which means every one of them passes just as
+   * happily if the constraints were never applied — the handler would refuse
+   * first and nothing would reach the database to be refused.
+   *
+   * So these write with Prisma directly, bypassing the route. `harness.test.ts`
+   * already asserts the three objects exist by name; what it cannot say is
+   * whether they *do* anything, and a CHECK on the wrong expression is a
+   * constraint that exists and permits everything.
+   *
+   * Prisma surfaces the two failures differently, which is itself worth
+   * pinning: a CHECK violation has no Prisma error code at all — it arrives as
+   * a `PrismaClientUnknownRequestError` whose message carries the constraint
+   * name — while the unique index is a `P2002` with the four columns in
+   * `meta.target`. The route's duplicate handler branches on that `P2002`, so
+   * the shape is load-bearing rather than incidental.
+   */
+  describe("the constraints underneath the API", () => {
+    it("refuses a self-trade at the database, not only in the handler", async () => {
+      const { alice, aliceOnly, bobOnly } = await twoTraders();
+
+      await expect(
+        prisma.trade.create({
+          data: {
+            fromUserId: alice.id,
+            toUserId: alice.id,
+            offeredCardId: aliceOnly.id,
+            requestedCardId: bobOnly.id,
+          },
+        })
+      ).rejects.toThrow(/Trade_no_self_trade/);
+
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("refuses the same card on both sides at the database", async () => {
+      const { alice, bob, aliceOnly } = await twoTraders();
+
+      await expect(
+        prisma.trade.create({
+          data: {
+            fromUserId: alice.id,
+            toUserId: bob.id,
+            offeredCardId: aliceOnly.id,
+            requestedCardId: aliceOnly.id,
+          },
+        })
+      ).rejects.toThrow(/Trade_distinct_cards/);
+
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("refuses a second pending row for the same offer at the database", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const offer = {
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      };
+      await prisma.trade.create({ data: offer });
+
+      // P2002 with all four columns named — the shape the route's catch reads
+      // to turn this into the same 409 its own `findFirst` would have given.
+      await expect(prisma.trade.create({ data: offer })).rejects.toMatchObject({
+        code: "P2002",
+        meta: {
+          target: ["fromUserId", "toUserId", "offeredCardId", "requestedCardId"],
+        },
+      });
+
+      expect(await prisma.trade.count()).toBe(1);
+    });
+
+    it("lets the same offer be inserted again once the first is answered", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const offer = {
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      };
+      const first = await prisma.trade.create({ data: offer });
+
+      // The index is `WHERE status = 'PENDING'`, so answering the first one
+      // takes it out of the index rather than out of the table. A total unique
+      // index would pass every other test in this file and make a refused offer
+      // permanently unrepeatable, which is the opposite of what a decline
+      // means. Both statuses are checked because both leave PENDING.
+      await prisma.trade.update({
+        where: { id: first.id },
+        data: { status: "DECLINED", respondedAt: new Date() },
+      });
+      const second = await prisma.trade.create({ data: offer });
+
+      await prisma.trade.update({
+        where: { id: second.id },
+        data: { status: "ACCEPTED", respondedAt: new Date() },
+      });
+      await prisma.trade.create({ data: offer });
+
+      expect(await prisma.trade.count()).toBe(3);
+      expect(await prisma.trade.count({ where: { status: "PENDING" } })).toBe(1);
+    });
+  });
+
   describe("leaks and auth", () => {
     it("never returns an email address or a password hash", async () => {
       const { alice, bob, aliceOnly, bobOnly, common } = await twoTraders();
