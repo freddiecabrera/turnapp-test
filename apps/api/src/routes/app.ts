@@ -69,19 +69,25 @@ appRouter.post("/scan", async (req, res) => {
       });
       if (claim.count === 0) throw new Error("ALREADY_SCANNED");
 
+      // Read only to decide the points award, never to compute the new
+      // quantity. `existing.quantity + 1` is an absolute value derived from a
+      // stale read: under READ COMMITTED another writer of this row blocks the
+      // write below, commits, and then this overwrites what it just did.
       const existing = await tx.userCard.findUnique({
         where: { userId_cardId: { userId, cardId: qr.cardId } },
+        select: { id: true },
       });
       const alreadyOwned = !!existing;
 
-      if (existing) {
-        await tx.userCard.update({
-          where: { id: existing.id },
-          data: { quantity: existing.quantity + 1 },
-        });
-      } else {
-        await tx.userCard.create({ data: { userId, cardId: qr.cardId, quantity: 1 } });
-      }
+      // Relative, and keyed by (userId, cardId) rather than the id read above,
+      // so this adds exactly one copy however the row changed in between — an
+      // accepted trade may have incremented it, or deleted it outright. The
+      // same upsert `moveCard` uses; see DESIGN.md, "The swap".
+      await tx.userCard.upsert({
+        where: { userId_cardId: { userId, cardId: qr.cardId } },
+        create: { userId, cardId: qr.cardId, quantity: 1 },
+        update: { quantity: { increment: 1 } },
+      });
 
       let pointsAwarded = 0;
       if (!alreadyOwned) {
