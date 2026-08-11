@@ -143,15 +143,46 @@ npm --workspace @turnapp/api run prisma:generate
 
 ### Tests
 
-`npm test` runs Vitest against a **separate `turnapp_test` database** on the same container —
-dev data is never touched. The global setup runs `prisma migrate reset --force --skip-seed`
-against that database, which creates it on first run and rebuilds it from the migration files
-on every run. Rebuilding rather than `migrate deploy`-ing is deliberate: `deploy` keys off a
-migration's *name*, so it ignores the hand-edits to already-applied migration SQL that
-"Changing the data model" step 4 tells you to make.
+`npm test` runs Vitest against a **separate test database** on the same container — dev data is
+never touched. The global setup runs `prisma migrate reset --force --skip-seed` against that
+database, which creates it on first run and rebuilds it from the migration files on every run.
+Rebuilding rather than `migrate deploy`-ing is deliberate: `deploy` keys off a migration's
+*name*, so it ignores the hand-edits to already-applied migration SQL that "Changing the data
+model" step 4 tells you to make.
 
 Prerequisites are the full cold start, not just Docker: `.env`, `npm install`,
 `prisma:generate` (see the note ten lines above), and `npm run db:up`.
+
+**The test database is per checkout, not per repo.** `test/env.ts` appends `_test_<tag>` to the
+dev database name, where `<tag>` is the first eight hex digits of a SHA-1 of this worktree's
+real path — so the main checkout and each `git worktree` get `turnapp_test_1a2b3c4d`,
+`turnapp_test_9f0e1d2c`, and so on:
+
+```bash
+docker exec turnapp-db psql -U turn -d postgres -c '\l' | grep turnapp   # who owns what
+```
+
+This exists because the global setup **drops the schema**. With one shared `turnapp_test`, two
+worktrees running `npm test` at the same time reset each other mid-run, and the victim fails
+with `The table public.Season does not exist` — a failure that reads like a code bug and
+belongs to another process entirely. Two suites can now run concurrently and neither notices
+the other.
+
+Three properties that constrain any change to that derivation:
+
+- **Stable, never fresh.** The tag is a hash of a path, so it is identical on every run from
+  the same worktree. A timestamp or a random suffix would make `migrate reset` build and
+  abandon a new database on every single run.
+- **The safety guard is the `_test_<8 hex>` shape.** `global-setup.ts` refuses to reset a URL
+  that doesn't match it, and writes the pattern out itself rather than importing it — the check
+  is only worth having if it can disagree with the module that derived the name.
+- **Deleting a stale one is free.** The database is a throwaway rebuilt from the migrations;
+  after removing a worktree, `docker exec turnapp-db psql -U turn -d postgres -c 'DROP DATABASE
+  turnapp_test_<tag>'` reclaims it. Nothing else references it by name.
+
+The suite's readiness polls (`waitForLockWaiters`, and the decline suite's blocked-writer
+check) read `pg_stat_activity` filtered on `current_database()`, so per-checkout databases also
+stop one worktree's blocked query from satisfying another's wait.
 
 These are integration tests against real Postgres, not unit tests with a mocked Prisma client:
 the risk in this codebase is transaction semantics, and a mock would only test the mock. Test
