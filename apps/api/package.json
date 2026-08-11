@@ -11,7 +11,7 @@
     "migrate": "dotenv -e ../../.env -- prisma migrate dev --name init",
     "migrate:deploy": "dotenv -e ../../.env -- prisma migrate deploy",
     "seed": "tsx prisma/seed.ts",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "test": "vitest run",
     "test:watch": "vitest"
   },
