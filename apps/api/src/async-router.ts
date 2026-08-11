@@ -3,6 +3,12 @@ import { Router, RouterOptions } from "express";
 /** The registration methods this app uses. `router.route()` is not one of them. */
 const REGISTRARS = ["use", "all", "get", "post", "put", "patch", "delete"] as const;
 
+/** The names above, as a type — the only keys of `Router` this file touches. */
+type Registrar = (typeof REGISTRARS)[number];
+
+/** What each of those is, once its overloads are flattened. */
+type AnyRegistrar = (...args: unknown[]) => unknown;
+
 /**
  * `express.Router()`, but a handler that rejects reaches the error middleware
  * instead of killing the process.
@@ -28,8 +34,11 @@ export function asyncRouter(options?: RouterOptions): Router {
   const router = Router(options);
 
   // Cast once: the real signatures are heavily overloaded, and re-deriving them
-  // per method buys nothing when every argument is forwarded untouched.
-  const registrars = router as unknown as Record<string, (...args: unknown[]) => unknown>;
+  // per method buys nothing when every argument is forwarded untouched. Keyed
+  // by `Registrar` rather than `string`, because `Router` has string keys that
+  // are not functions at all — `router.stack` is an array — and a
+  // `Record<string, ...>` would claim otherwise for every one of them.
+  const registrars = router as unknown as Record<Registrar, AnyRegistrar>;
   for (const method of REGISTRARS) {
     const register = registrars[method].bind(router);
     registrars[method] = (...args: unknown[]) => register(...args.map(wrap));
