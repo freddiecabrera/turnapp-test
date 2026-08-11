@@ -5,6 +5,7 @@ import { authRouter } from "./routes/auth";
 import { appRouter } from "./routes/app";
 import { adminRouter } from "./routes/admin";
 import { usersRouter } from "./routes/users";
+import { tradesRouter } from "./routes/trades";
 
 /**
  * The configured Express app, with no server attached.
@@ -26,12 +27,14 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use("/auth", authRouter);
 app.use("/admin", adminRouter);
 app.use("/users", usersRouter);
+app.use("/trades", tradesRouter);
 // Mounted last as a preference, not a requirement. `appRouter` sits on "/" and
 // runs `requireAuth` for everything reaching it, but `requireAuth` calls
-// `next()` and none of `appRouter`'s own routes match `/users/...`, so the
-// request falls out of that router and Express carries on to the next layer
-// whichever order they mount in. Specific paths first just avoids running
-// `requireAuth` twice, and keeps an anonymous 401 coming from the owning router.
+// `next()` and none of `appRouter`'s own routes match `/users/...` or
+// `/trades/...`, so the request falls out of that router and Express carries on
+// to the next layer whichever order they mount in. Specific paths first just
+// avoids running `requireAuth` twice, and keeps an anonymous 401 coming from the
+// router that owns the path.
 app.use("/", appRouter);
 
 /**
