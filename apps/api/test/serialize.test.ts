@@ -52,16 +52,39 @@ describe("toPublicTrade", () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
     const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
-    expect(toPublicTrade(trade, alice.id).direction).toBe("sent");
-    expect(toPublicTrade(trade, bob.id).direction).toBe("received");
+    expect(toPublicTrade(trade, alice.id, null).direction).toBe("sent");
+    expect(toPublicTrade(trade, bob.id, null).direction).toBe("received");
+  });
+
+  it("keeps the parties on the correct sides for both viewers", async () => {
+    const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+    const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
+
+    // direction is derived from the scalar ids while fromUser/toUser come from
+    // the relations, so a swap here is invisible to the direction assertions.
+    for (const viewer of [alice.id, bob.id]) {
+      const dto = toPublicTrade(trade, viewer, null);
+      expect(dto.fromUser.id).toBe(alice.id);
+      expect(dto.fromUser.username).toBe("alice");
+      expect(dto.toUser.id).toBe(bob.id);
+      expect(dto.toUser.username).toBe("bob");
+    }
+  });
+
+  it("carries the trade's own id, not a card's", async () => {
+    const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+    const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
+
+    // This id is what POST /trades/:id/accept gets called with.
+    expect(toPublicTrade(trade, alice.id, null).id).toBe(trade.id);
   });
 
   it("describes the same cards regardless of who is looking", async () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
     const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
-    const asSender = toPublicTrade(trade, alice.id);
-    const asRecipient = toPublicTrade(trade, bob.id);
+    const asSender = toPublicTrade(trade, alice.id, null);
+    const asRecipient = toPublicTrade(trade, bob.id, null);
 
     // "offered" is sender-relative and must not flip — only `direction` changes.
     expect(asSender.offeredCard.id).toBe(aliceOnly.id);
@@ -74,14 +97,14 @@ describe("toPublicTrade", () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
     const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
-    expect(() => toPublicTrade(trade, "somebody-else")).toThrow(/non-participant/);
+    expect(() => toPublicTrade(trade, "somebody-else", null)).toThrow(/non-participant/);
   });
 
   it("rewrites imageUrl on BOTH cards, not just the offered one", async () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
     const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
-    const dto = toPublicTrade(trade, alice.id);
+    const dto = toPublicTrade(trade, alice.id, null);
 
     expect(dto.offeredCard.imageUrl).toMatch(/^\/static\/cards\//);
     expect(dto.requestedCard.imageUrl).toMatch(/^\/static\/cards\//);
@@ -91,7 +114,7 @@ describe("toPublicTrade", () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
     const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
-    const serialized = JSON.stringify(toPublicTrade(trade, alice.id));
+    const serialized = JSON.stringify(toPublicTrade(trade, alice.id, null));
 
     expect(serialized).not.toContain("@test.local");
     expect(serialized).not.toContain("passwordHash");
@@ -104,19 +127,18 @@ describe("toPublicTrade", () => {
 
     expect(toPublicTrade(trade, alice.id, true).fulfillable).toBe(true);
     expect(toPublicTrade(trade, alice.id, false).fulfillable).toBe(false);
-    expect(toPublicTrade(trade, alice.id).fulfillable).toBeNull();
+    expect(toPublicTrade(trade, alice.id, null).fulfillable).toBeNull();
   });
 
   it("forces fulfillable to null once a trade has been answered", async () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
 
     for (const status of ["ACCEPTED", "DECLINED"] as const) {
-      await prisma.trade.deleteMany();
       const trade = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id, status);
 
       // Even when the caller insists, an answered trade reports null.
       expect(toPublicTrade(trade, alice.id, true).fulfillable).toBeNull();
-      expect(toPublicTrade(trade, alice.id).status).toBe(status);
+      expect(toPublicTrade(trade, alice.id, null).status).toBe(status);
     }
   });
 
@@ -124,12 +146,11 @@ describe("toPublicTrade", () => {
     const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
     const pending = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id);
 
-    const dto = toPublicTrade(pending, alice.id);
-    expect(dto.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    const dto = toPublicTrade(pending, alice.id, null);
+    expect(dto.createdAt).toBe(pending.createdAt.toISOString());
     expect(dto.respondedAt).toBeNull();
 
-    await prisma.trade.deleteMany();
     const declined = await makeTrade(alice.id, bob.id, aliceOnly.id, bobOnly.id, "DECLINED");
-    expect(toPublicTrade(declined, alice.id).respondedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(toPublicTrade(declined, alice.id, null).respondedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
   });
 });

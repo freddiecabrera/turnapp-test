@@ -82,20 +82,27 @@ type TradeWithParties = PrismaTrade & {
  * Returning the raw Prisma cards would work in a simulator and break every
  * image on a physical device.
  *
- * `fulfillable` is supplied by the caller — it needs an ownership lookup the
- * trade row can't answer on its own — and is forced to null for trades that
- * have already been answered, where it would be meaningless.
+ * `fulfillable` is required rather than defaulted. It needs an ownership lookup
+ * the trade row can't answer on its own, and a default would let a caller
+ * silently emit null for a live pending trade — which clients read as "already
+ * answered". Pass the computed value, or an explicit null to say you didn't
+ * compute it. Answered trades are forced to null either way.
+ *
+ * Throws for a viewer who is neither party. NOTE: Express 4 does not route
+ * async rejections to the error middleware, so an uncaught throw here exits the
+ * process. Callers must catch it — see the trading routes.
  */
 export function toPublicTrade(
   trade: TradeWithParties,
   viewerId: string,
-  fulfillable: boolean | null = null
+  fulfillable: boolean | null
 ): Trade {
   const isSender = trade.fromUserId === viewerId;
 
   // A viewer who is neither party has no direction, and quietly defaulting to
   // "received" would hand them a plausible-looking view of someone else's
-  // trade. Routes already filter by participant; this makes a slip loud.
+  // trade. Routes already filter by participant; this catches a slip in that
+  // filter rather than serving the wrong person's data.
   if (!isSender && trade.toUserId !== viewerId) {
     throw new Error(`Cannot serialize trade ${trade.id} for non-participant ${viewerId}`);
   }

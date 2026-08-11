@@ -142,8 +142,8 @@ export interface Trade {
    * Whether both sides still own their cards, so the trade could still go
    * through. Derived at read time rather than stored, because several pending
    * trades can legitimately name the same card and only some of them stay
-   * possible. `null` once a trade is accepted or declined, where it no longer
-   * means anything.
+   * possible. `null` means not applicable: the trade has been answered, or
+   * the endpoint did not compute it. Never treat `null` as `false`.
    */
   fulfillable: boolean | null;
   fromUser: UserSummary;

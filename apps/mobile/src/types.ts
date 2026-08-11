@@ -73,7 +73,10 @@ export interface Trade {
    * to work out which card you're giving up.
    */
   direction: "sent" | "received";
-  /** Both sides still own their cards. `null` once accepted or declined. */
+  /**
+   * Both sides still own their cards. `null` means not applicable — either
+   * the trade was answered, or this endpoint didn't compute it. Not `false`.
+   */
   fulfillable: boolean | null;
   fromUser: UserSummary;
   toUser: UserSummary;
