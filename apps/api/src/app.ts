@@ -4,6 +4,7 @@ import cors from "cors";
 import { authRouter } from "./routes/auth";
 import { appRouter } from "./routes/app";
 import { adminRouter } from "./routes/admin";
+import { usersRouter } from "./routes/users";
 
 /**
  * The configured Express app, with no server attached.
@@ -24,6 +25,10 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 
 app.use("/auth", authRouter);
 app.use("/admin", adminRouter);
+app.use("/users", usersRouter);
+// Mounted last on purpose: `appRouter` sits on "/" and runs `requireAuth` for
+// every request that reaches it, so anything mounted after it would be answered
+// by that middleware before its own routes were consulted.
 app.use("/", appRouter);
 
 // Basic error handler so multer / async errors return JSON.
