@@ -24,6 +24,9 @@ const SEARCH_LIMIT = 20;
 /** Postgres `integer` ceiling — `User.userIdNumber` is an Int column. */
 const MAX_INT4 = 2147483647;
 
+/** The columns a user is allowed to see of another user. */
+const SUMMARY_SELECT = { id: true, username: true, userIdNumber: true } as const;
+
 /**
  * Postgres rejects a null byte inside a `text` value outright — `22021 invalid
  * byte sequence for encoding "UTF8": 0x00` — so a string carrying one cannot be
@@ -61,9 +64,14 @@ function likeLiteral(q: string): string {
  * overflows int4 at the database. Both cases drop the numeric branch from the
  * query rather than erroring: a search for a username that happens to look like
  * a huge number should still search usernames.
+ *
+ * Leading zeros are rejected rather than normalised away. "0100300" is not the
+ * ID a user was given, and quietly treating it as one makes an exact-match
+ * lookup answer to strings that aren't the identifier. It still searches
+ * usernames, which is where a string with a leading zero belongs.
  */
 function asUserIdNumber(q: string): number | null {
-  if (!/^\d+$/.test(q)) return null;
+  if (!/^(?:0|[1-9]\d*)$/.test(q)) return null;
   const n = Number(q);
   return Number.isSafeInteger(n) && n <= MAX_INT4 ? n : null;
 }
@@ -93,25 +101,35 @@ usersRouter.get("/search", async (req, res) => {
   // No query, no results. Returning every user here would be an address book.
   if (!q) return res.json([]);
 
+  // You can't trade with yourself, so you shouldn't find yourself; and admins
+  // are staff accounts, not trading partners.
+  const eligible = { id: { not: req.auth!.userId }, isAdmin: false };
+
   const idNumber = asUserIdNumber(q);
 
-  const users = await prisma.user.findMany({
-    where: {
-      // You can't trade with yourself, so you shouldn't find yourself.
-      id: { not: req.auth!.userId },
-      isAdmin: false,
-      OR: [
-        { username: { contains: likeLiteral(q), mode: "insensitive" } },
-        // Exact match: an ID number is an identifier, not a name to browse by.
-        ...(idNumber !== null ? [{ userIdNumber: idNumber }] : []),
-      ],
-    },
-    select: { id: true, username: true, userIdNumber: true },
+  // The ID hit is fetched on its own instead of joining the username results in
+  // an `OR`. Sharing one query means sharing one `take`, and the alphabetical
+  // sort can then push an exact ID match past the cap — losing the single
+  // result the caller was most certain about.
+  const exact =
+    idNumber === null
+      ? null
+      : await prisma.user.findFirst({
+          where: { ...eligible, userIdNumber: idNumber },
+          select: SUMMARY_SELECT,
+        });
+
+  const byUsername = await prisma.user.findMany({
+    where: { ...eligible, username: { contains: likeLiteral(q), mode: "insensitive" } },
+    select: SUMMARY_SELECT,
     orderBy: { username: "asc" },
     take: SEARCH_LIMIT,
   });
 
-  const summaries: UserSummary[] = users.map(toUserSummary);
+  // Exact first, then the fragment matches, and never the same person twice.
+  const users = exact ? [exact, ...byUsername.filter((u) => u.id !== exact.id)] : byUsername;
+
+  const summaries: UserSummary[] = users.slice(0, SEARCH_LIMIT).map(toUserSummary);
   res.json(summaries);
 });
 

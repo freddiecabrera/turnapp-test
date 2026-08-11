@@ -141,6 +141,39 @@ describe("GET /users/search", () => {
     expect((res.body as UserSummary[]).length).toBeLessThanOrEqual(20);
   });
 
+  it("puts an exact ID match first, where the cap cannot drop it", async () => {
+    const caller = await createUser("caller");
+    const target = await createUser("zzz-target");
+    const needle = String(target.userIdNumber);
+    // More username matches than the cap, all sorting before the target: in a
+    // single OR'd query the one result the caller was certain about is the one
+    // that falls off the end.
+    for (let i = 0; i < 25; i += 1) {
+      await createUser(`aaa-${needle}-${String(i).padStart(2, "0")}`);
+    }
+
+    const res = await authedApi(caller, "get", `/users/search?q=${needle}`);
+
+    const users = res.body as UserSummary[];
+    expect(users[0].id).toBe(target.id);
+    // Still capped — the ID match is prepended, not added on top of the limit.
+    expect(users).toHaveLength(20);
+  });
+
+  it("lists a user matched by both ID and username only once", async () => {
+    const caller = await createUser("caller");
+    const target = await createUser("placeholder");
+    // A username that is also their ID number: matched by both branches.
+    await prisma.user.update({
+      where: { id: target.id },
+      data: { username: String(target.userIdNumber) },
+    });
+
+    const res = await authedApi(caller, "get", `/users/search?q=${target.userIdNumber}`);
+
+    expect((res.body as UserSummary[]).map((u) => u.id)).toEqual([target.id]);
+  });
+
   it("does not treat % or _ in the query as wildcards", async () => {
     const caller = await createUser("caller");
     await createUser("Taylor Poole");
@@ -182,6 +215,20 @@ describe("GET /users/search", () => {
     // Backslash is Postgres's own LIKE escape, so it has to survive escaping too.
     const byBackslash = await authedApi(caller, "get", `/users/search?q=${encodeURIComponent("k\\s")}`);
     expect((byBackslash.body as UserSummary[]).map((u) => u.id)).toEqual([back.id]);
+  });
+
+  it("does not read a zero-padded number as an ID match", async () => {
+    const caller = await createUser("caller");
+    const target = await createUser("target");
+
+    const exact = await authedApi(caller, "get", `/users/search?q=${target.userIdNumber}`);
+    expect((exact.body as UserSummary[]).map((u) => u.id)).toEqual([target.id]);
+
+    // "0100300" is not the ID anybody was issued; it searches usernames instead.
+    for (const padded of [`0${target.userIdNumber}`, `00${target.userIdNumber}`]) {
+      const res = await authedApi(caller, "get", `/users/search?q=${padded}`);
+      expect(res.body, padded).toEqual([]);
+    }
   });
 
   it("rejects a null byte in the query without dropping the process", async () => {
