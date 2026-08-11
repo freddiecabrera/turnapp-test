@@ -248,6 +248,16 @@ state transition that must not double-apply.
 - **Never leak `email` or `passwordHash`.** `toPublicUser` exists; use it.
 - **Errors are `{ "error": "message" }`.** The mobile client (`apps/mobile/src/api.ts`) throws
   `body.error` directly to the UI, so error strings are user-facing copy. Write them that way.
+  Say it in the route, with an explicit `res.status(...).json({ error })` — the error middleware
+  in `app.ts` answers a fixed sentence and never returns `err.message`, because a Prisma
+  rejection's message carries the failing query and an absolute path into the source tree.
+- **Every router is `asyncRouter()` from `src/async-router.ts`, never `express.Router()`.**
+  Express 4 ignores the promise an `async` handler returns, so a rejection inside one is an
+  unhandled rejection and Node 20 exits the process — one malformed request takes the API down
+  for everybody. `asyncRouter` wraps at registration so the boundary can't be forgotten a
+  handler at a time, but it is opt-in per router: a plain `Router()` silently has none of it.
+  `routes/trades.ts` on `feat/th6-create-trade` is still a plain `Router()` and needs
+  converting when that branch lands.
 - **Auth**: `appRouter` is entirely behind `requireAuth`; `req.auth.userId` is the caller.
   Never take an actor identity from the request body.
 - **Validation is hand-rolled.** No zod or equivalent — match the existing inline

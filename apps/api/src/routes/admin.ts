@@ -1,13 +1,13 @@
 import path from "path";
 import fs from "fs";
 import crypto from "crypto";
-import { Router } from "express";
 import multer from "multer";
+import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth, requireAdmin } from "../auth";
 import { toPublicCard, toPublicQrCode, toPublicUser } from "../serialize";
 
-export const adminRouter = Router();
+export const adminRouter = asyncRouter();
 
 const cardsDir = path.resolve(__dirname, "../../static/cards");
 fs.mkdirSync(cardsDir, { recursive: true });

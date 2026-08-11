@@ -1,10 +1,10 @@
-import { Router } from "express";
 import { POINT_TIERS } from "@turnapp/shared";
+import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
 import { toPublicCard } from "../serialize";
 
-export const appRouter = Router();
+export const appRouter = asyncRouter();
 
 // Every app route requires a logged-in user.
 appRouter.use(requireAuth);

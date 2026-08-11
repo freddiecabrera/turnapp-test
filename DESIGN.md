@@ -285,8 +285,28 @@ imply "state changed."
 
 ## API
 
-All routes on `appRouter` (`apps/api/src/routes/app.ts`), already behind `requireAuth`. Shapes
-follow the existing flat style (`/scan`, `/cards`, `/wallet`).
+Shapes follow the existing flat style (`/scan`, `/cards`, `/wallet`), and everything sits behind
+`requireAuth` the way `appRouter` already does.
+
+Split across two new routers rather than added to `routes/app.ts`. That file already carries
+seasons, cards, scan and wallet in 143 lines; adding eight trading and user endpoints would have
+roughly tripled it, and `routes/admin.ts` establishes that a separate router per concern is the
+house style. So: `routes/users.ts` for the two user reads, `routes/trades.ts` for the trades.
+
+Mount order is a preference here, not a constraint. `appRouter` is mounted at `/` and applies
+`requireAuth` to everything that reaches it — but `requireAuth` calls `next()`, and none of
+`appRouter`'s own routes match `/users/...` or `/trades/...`, so the request falls out of that
+router and Express carries on to the next layer. Either order answers correctly, with the same
+status codes. The new routers mount first anyway, for two small reasons: `requireAuth` then runs
+once per request instead of twice, and an anonymous request gets its 401 from the router that
+owns the path rather than from `appRouter`.
+
+Both new routers are built with `asyncRouter()` rather than `express.Router()`. Express 4 drops
+a handler's returned promise on the floor, so a rejection inside an `async` route is an
+unhandled rejection — which Node 20 turns into a process exit. `asyncRouter` wraps every handler
+at registration so the rejection reaches the error middleware instead. It is not specific to
+trading: the existing routers were switched to it too, because `GET /cards?seasonId=…` had the
+same exposure.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
