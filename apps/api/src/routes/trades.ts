@@ -4,6 +4,7 @@ import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
 import { toPublicTrade } from "../serialize";
+import { hasNullByte } from "../validation";
 
 /**
  * Trading: the board, and the three things a person can do to a trade.
@@ -70,6 +71,17 @@ const ALREADY_ANSWERED = "This trade has already been answered. Refresh to see h
 const TRADE_NOT_FOUND = "We couldn't find that trade.";
 
 /**
+ * An id that cannot name a trade because Postgres will not hold it, shared by
+ * accept and decline.
+ *
+ * Deliberately a 400 rather than the 404 next to it. A 404 is an answer about
+ * the table — we looked, nothing matched — and this route never gets to look:
+ * `hasNullByte` refuses the string before a query is built, so claiming the
+ * trade does not exist would be reporting a lookup that never happened.
+ */
+const INVALID_TRADE_ID = "That isn't a valid trade id.";
+
+/**
  * Everything `toPublicTrade` needs, and nothing it doesn't.
  *
  * Top-level `include` for the trade's own columns, nested `select` for the two
@@ -111,9 +123,22 @@ class TradeError extends Error {
  * being coerced into a lookup — `String(null)` is `"null"`, which is a
  * perfectly valid thing to go looking for and a terrible thing to go looking
  * for. Trimming matches how `POST /scan` reads its code.
+ *
+ * A string carrying a null byte is refused here too, and this is the reason the
+ * check is inside `readId` rather than beside each field: `.trim()` does not
+ * remove `\0` — it is not whitespace — so a well-formed cuid with one appended
+ * survived every check above and only failed at Postgres, as a 500. One choke
+ * point every id already passes through cannot be forgotten a field at a time,
+ * the way three separate guards can. See `../validation`.
+ *
+ * The caller's own "this field is missing" copy then covers it. That is not a
+ * loss of detail: no client sends a null byte by accident, and both answers
+ * mean the same thing to the person reading them — the id you gave me is not
+ * usable, choose again.
  */
 function readId(value: unknown): string | null {
   if (typeof value !== "string") return null;
+  if (hasNullByte(value)) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
@@ -483,6 +508,14 @@ async function moveCard(
 tradesRouter.post("/:id/accept", async (req, res) => {
   const viewerId = req.auth!.userId;
 
+  // A path segment reaches Postgres exactly as a body value does, and this one
+  // skips `readId` entirely — so it needs its own guard. No trade id we issue
+  // contains a null byte, which makes this never a real lookup, only a 500 we
+  // can decline to produce. See `../validation`.
+  if (hasNullByte(req.params.id)) {
+    return res.status(400).json({ error: INVALID_TRADE_ID });
+  }
+
   // Only the columns the decision needs. `include`-ing the parties here would
   // pull two `User` rows — emails and hashes included — for a request that may
   // well end in a 403.
@@ -595,6 +628,12 @@ tradesRouter.post("/:id/accept", async (req, res) => {
  */
 tradesRouter.post("/:id/decline", async (req, res) => {
   const viewerId = req.auth!.userId;
+
+  // Same guard as accept, for the same reason: `:id` never passes through
+  // `readId`, and a null byte in it is refused by Postgres rather than answered.
+  if (hasNullByte(req.params.id)) {
+    return res.status(400).json({ error: INVALID_TRADE_ID });
+  }
 
   // Only the columns the decision needs. `include`-ing the parties here would
   // pull two `User` rows — emails and hashes included — for a request that may

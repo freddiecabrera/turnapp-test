@@ -303,6 +303,50 @@ describe("POST /trades", () => {
 
       expect(await prisma.trade.count()).toBe(0);
     });
+
+    /**
+     * Postgres refuses `0x00` inside a `text` value — `22021` — so an id
+     * carrying one cannot be looked up, only declined. Unguarded it reached the
+     * driver and came back as a 500, while `GET /users/search` and
+     * `GET /users/:id/cards` answered 400 to the same byte.
+     *
+     * The trailing case is the one that explains why it slipped through: every
+     * id here is trimmed, and `.trim()` does not remove `\0` — it is not
+     * whitespace — so a perfectly well-formed cuid with one appended passed
+     * every check in the handler and failed at the database.
+     */
+    it("rejects a null byte in any of the three ids rather than 500ing", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const full = {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      };
+
+      const cases: Array<[keyof typeof full, string]> = [
+        ["toUserId", "Choose someone to trade with."],
+        ["offeredCardId", "Choose one of your cards to offer."],
+        ["requestedCardId", "Choose a card to ask for."],
+      ];
+
+      for (const [field, error] of cases) {
+        const res = await post(alice, { ...full, [field]: "aa\u0000bb" });
+        expect(res.status, field).toBe(400);
+        expect(res.body, field).toEqual({ error });
+      }
+
+      const trailing = await post(alice, { ...full, toUserId: `${bob.id}\u0000` });
+      expect(trailing.status).toBe(400);
+      expect(trailing.body).toEqual({ error: "Choose someone to trade with." });
+
+      expect(await prisma.trade.count()).toBe(0);
+
+      // Refused at the edge means nothing reached the driver, and the request
+      // that shows it is the next one: the same route still works, and the
+      // process is still here to answer it.
+      const after = await post(alice, full);
+      expect(after.status).toBe(201);
+    });
   });
 
   describe("400 — a trade that cannot make sense", () => {

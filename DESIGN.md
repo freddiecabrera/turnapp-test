@@ -269,6 +269,7 @@ what they offered, does the recipient still own what was requested. One extra qu
 | Case | Where | Result |
 | --- | --- | --- |
 | Trading with yourself | create | 400 |
+| A null byte in any id (body or `:id`) | create/accept/decline, edge guard | 400 |
 | Offering and requesting the same card | create | 400 |
 | Offering a card you don't own | create | 400 |
 | Requesting a card they don't own | create | 400 |
@@ -382,9 +383,20 @@ identity check.
 and collections are public by nature in a trading app — stated as a product decision rather
 than left implicit.
 
+**Null bytes are refused at the edge, on every id.** Postgres rejects `0x00` inside a `text`
+value (`22021 invalid byte sequence for encoding "UTF8"`), so a string carrying one cannot be
+queried with — only refused. `asyncRouter` stops that rejection killing the process, but a 500
+is the wrong answer to input that can be classified before the database is touched, and it
+costs the 500 its meaning: a bug nobody anticipated. `hasNullByte` lives in
+`apps/api/src/validation.ts` and is applied by both routers — the three body ids on create
+(inside `readId`, which is the single choke point every id already passes through) and the
+`:id` parameter on accept and decline. Note `.trim()` does not strip `\0`, which is how a
+well-formed cuid with one appended got all the way to Postgres.
+
 ### Status codes
 
-- **400** — validation: self-trade, same card both sides, missing fields, card not owned
+- **400** — validation: self-trade, same card both sides, missing fields, card not owned,
+  a null byte in any id
 - **403** — not the recipient, trying to respond
 - **404** — trade, user, or card not found
 - **409** — already answered, or ownership vanished between create and accept
