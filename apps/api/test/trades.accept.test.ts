@@ -4,12 +4,18 @@ import {
   api,
   authedApi,
   copiesOf,
+  createCard,
+  createSeason,
   createUser,
   grant,
   hasRowFor,
+  inFlight,
   prisma,
   resetDatabase,
+  totalCopiesOf,
   twoTraders,
+  waitForLockWaiters,
+  withUserCardLocked,
 } from "./helpers";
 
 /**
@@ -488,10 +494,11 @@ describe("POST /trades/:id/accept", () => {
         requestedCardId: bobOnly.id,
       });
 
-      // Both in flight before either finishes. The loser contends on the Trade
-      // row inside the claim — which is why the claim comes first: it blocks,
-      // re-reads, and finds the row is no longer PENDING before it has touched
-      // a single collection.
+      // Both in flight before either finishes. Which guard refuses the loser
+      // depends on the schedule: if its `findUnique` lands after the winner
+      // commits, the pre-transaction status check answers and the transaction
+      // is never entered. Same status, same sentence either way — so this case
+      // pins the outcome, and the one below it pins the path.
       const results = await Promise.all([accept(bob, trade.id), accept(bob, trade.id)]);
 
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([200, 409]);
@@ -506,6 +513,132 @@ describe("POST /trades/:id/accept", () => {
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
     });
 
+    it("refuses a second accept that reached its claim while the first held it", async () => {
+      const season = await createSeason();
+      const mine = await createCard(season.id, "Mine");
+      const yours = await createCard(season.id, "Yours");
+      const alice = await createUser("alice");
+      const bob = await createUser("bob");
+      // Two copies each, so both ownership guards would clear a second swap and
+      // the claim is the only thing that can refuse it. One copy each would let
+      // `moveCard` take the credit for a refusal that isn't its to take.
+      await grant(alice.id, mine.id, 2);
+      await grant(bob.id, yours.id, 2);
+      const trade = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: mine.id,
+        requestedCardId: yours.id,
+      });
+
+      const pending = await withUserCardLocked(alice.id, mine.id, async () => {
+        // The first accept claims the trade and then parks inside `moveCard`,
+        // holding the Trade row's lock with nothing committed.
+        const winner = inFlight(accept(bob, trade.id));
+        await waitForLockWaiters(1);
+        // The second reads the trade as PENDING — the claim above is real but
+        // uncommitted — so the pre-transaction check waves it through and its
+        // own claim queues behind the first. That is the interleaving the
+        // Promise.all case above reaches only when the schedule cooperates,
+        // and it is the one the in-transaction claim exists for.
+        const loser = inFlight(accept(bob, trade.id));
+        await waitForLockWaiters(2);
+        return { winner, loser };
+      });
+      const winner = await pending.winner;
+      const loser = await pending.loser;
+
+      expect(winner.status).toBe(200);
+      expect(loser.status).toBe(409);
+      expect(loser.body).toEqual({ error: ALREADY_ANSWERED });
+
+      // One swap. Without the claim's count check the second transaction runs
+      // straight on into the moves and does the whole thing again.
+      expect(await copiesOf(alice.id, mine.id)).toBe(1);
+      expect(await copiesOf(bob.id, mine.id)).toBe(1);
+      expect(await copiesOf(bob.id, yours.id)).toBe(1);
+      expect(await copiesOf(alice.id, yours.id)).toBe(1);
+      expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+    });
+
+    it("hands one contested copy to exactly one of two trades accepted at once", async () => {
+      const season = await createSeason();
+      const prize = await createCard(season.id, "Prize");
+      const bobCard = await createCard(season.id, "Bob's");
+      const carolCard = await createCard(season.id, "Carol's");
+      const alice = await createUser("alice");
+      const bob = await createUser("bob");
+      const carol = await createUser("carol");
+
+      // One copy, promised to two people. Both offers were legitimate when they
+      // were made; only one can be legitimate now.
+      await grant(alice.id, prize.id, 1);
+      await grant(bob.id, bobCard.id, 1);
+      await grant(carol.id, carolCard.id, 1);
+
+      const toBob = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: prize.id,
+        requestedCardId: bobCard.id,
+      });
+      const toCarol = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: carol.id,
+        offeredCardId: prize.id,
+        requestedCardId: carolCard.id,
+      });
+
+      // Two different Trade rows, so nothing can short-circuit either request
+      // before its transaction: both claims succeed, and the copy they are both
+      // reaching for is what decides it. `moveCard`'s `quantity: { gte: 1 }`
+      // guard is the only thing standing between this and two copies of a card
+      // there was one of — and this is the only case that runs it concurrently.
+      const [bobRes, carolRes] = await Promise.all([
+        accept(bob, toBob.id),
+        accept(carol, toCarol.id),
+      ]);
+
+      expect([bobRes.status, carolRes.status].sort((a, b) => a - b)).toEqual([200, 409]);
+
+      const bobWon = bobRes.status === 200;
+      const winner = bobWon
+        ? { user: bob, card: bobCard, trade: toBob }
+        : { user: carol, card: carolCard, trade: toCarol };
+      const loser = bobWon
+        ? { user: carol, card: carolCard, trade: toCarol, res: carolRes }
+        : { user: bob, card: bobCard, trade: toBob, res: bobRes };
+
+      // The loser hears about alice's side, not their own: they still hold what
+      // they offered, and it is the prize that is gone.
+      expect(loser.res.body).toEqual({ error: SENDER_LOST_IT });
+
+      // One copy before, one copy after. Per-user counts say where it went;
+      // this says nothing was invented on the way.
+      expect(await totalCopiesOf(prize.id)).toBe(1);
+      expect(await copiesOf(winner.user.id, prize.id)).toBe(1);
+      expect(await copiesOf(loser.user.id, prize.id)).toBe(0);
+      expect(await hasRowFor(alice.id, prize.id)).toBe(false);
+
+      // The loser's half of the swap unwound with it, and their trade is still
+      // pending — nothing a human did to it.
+      expect(await copiesOf(loser.user.id, loser.card.id)).toBe(1);
+      expect(await copiesOf(alice.id, loser.card.id)).toBe(0);
+      expect(await copiesOf(alice.id, winner.card.id)).toBe(1);
+      expect((await storedTrade(winner.trade.id)).status).toBe("ACCEPTED");
+      expect((await storedTrade(loser.trade.id)).status).toBe("PENDING");
+    });
+  });
+
+  /**
+   * The same contention, answered one request at a time.
+   *
+   * Nothing here overlaps — each accept has finished before the next begins —
+   * so these are tests of ownership being re-verified at accept time rather
+   * than trusted from creation, which is a different property from the one the
+   * block above measures. They lived under `concurrency` and were not.
+   */
+  describe("several open offers for one copy, answered in turn", () => {
     it("lets the copy be claimed once when three people are offered it", async () => {
       const season = await prisma.season.create({ data: { name: "Contended" } });
       const alice = await createUser("alice");
