@@ -208,6 +208,21 @@ describe("POST /trades", () => {
       expect(await prisma.trade.count()).toBe(0);
     });
 
+    /**
+     * The duplicate check keys on four columns, and each of them has to be in
+     * the key or the endpoint refuses trades that are legal.
+     *
+     * The case below this comment varies `offeredCardId`, and for a long time
+     * it was the only one: dropping any of the other three from the `findFirst`
+     * left the whole suite green while `POST /trades` started answering 409 to
+     * offers DESIGN.md describes as valid. Each of the next three varies
+     * exactly one column and holds everything else identical, so it fails if
+     * and only if that column leaves the key.
+     *
+     * They go through the endpoint rather than `prisma.trade.create`, which is
+     * what makes them cover the handler's check — the board and accept suites
+     * seed rows directly, so the `findFirst` never sees those at all.
+     */
     it("allows a second, different offer to the same person", async () => {
       const { alice, bob, aliceOnly, bobOnly, dupe } = await twoTraders();
 
@@ -223,6 +238,73 @@ describe("POST /trades", () => {
       });
 
       expect([first.status, second.status]).toEqual([201, 201]);
+      expect(await prisma.trade.count()).toBe(2);
+    });
+
+    it("allows the same card to be offered for two different cards", async () => {
+      const { alice, bob, common, aliceOnly, bobOnly } = await twoTraders();
+
+      // Same sender, same recipient, same offered card — only the card being
+      // asked for differs, and bob owns both of them. Two distinct offers:
+      // "my aliceOnly for your bobOnly" and "my aliceOnly for your common".
+      const first = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const second = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect([first.status, second.status]).toEqual([201, 201]);
+      expect(await prisma.trade.count()).toBe(2);
+    });
+
+    it("allows the same offer to be made to two different people", async () => {
+      const { alice, bob, common, aliceOnly } = await twoTraders();
+      const carol = await createUser("carol");
+      await grant(carol.id, common.id);
+
+      // DESIGN.md's "offering one copy to four people": legal at creation, and
+      // a race only the accept guard is entitled to settle. Refusing the second
+      // one here would decide it in the wrong place.
+      const toBob = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+      const toCarol = await post(alice, {
+        toUserId: carol.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect([toBob.status, toCarol.status]).toEqual([201, 201]);
+      expect(await prisma.trade.count()).toBe(2);
+    });
+
+    it("allows two different people to make the same offer", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const dave = await createUser("dave");
+      await grant(dave.id, aliceOnly.id);
+
+      // Byte-identical offers apart from who is sending them. Bob now has two
+      // people asking for his bobOnly and offering the same card for it, which
+      // is the whole point of a trading board.
+      const fromAlice = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const fromDave = await post(dave, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+
+      expect([fromAlice.status, fromDave.status]).toEqual([201, 201]);
       expect(await prisma.trade.count()).toBe(2);
     });
 
