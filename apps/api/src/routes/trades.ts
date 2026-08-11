@@ -6,7 +6,8 @@ import { requireAuth } from "../auth";
 import { toPublicTrade } from "../serialize";
 
 /**
- * Trading. This file is the create half; accept and decline land beside it.
+ * Trading. Creating a trade and accepting one live here; decline lands beside
+ * them.
  *
  * Like `usersRouter`, this mounts ahead of `appRouter` in `app.ts` — that one
  * sits on "/" and runs `requireAuth` for everything reaching it, so a router
@@ -304,11 +305,18 @@ async function moveCard(
  * away, and "the sender no longer has what they offered" is the case that
  * separates a swap that works from one that quietly creates or destroys a card.
  *
- * The order inside the transaction is load-bearing. Claiming the trade first
- * means two simultaneous accepts contend on the `Trade` row before either has
- * touched a collection: the loser's `updateMany` matches nothing and it aborts
- * having moved nothing. Move the cards first and both accepts clear their
- * ownership checks against the same copy, and the swap happens twice.
+ * Claiming the trade first, before either `moveCard`, is deliberate — but not
+ * because moving first would let the swap happen twice. It wouldn't: the claim
+ * is in the same transaction, so a loser that has already moved both cards
+ * still fails the claim and unwinds the moves with it. Either order swaps
+ * exactly once.
+ *
+ * What the order buys is the right answer and a smaller lock footprint. A loser
+ * that moved first reports "they no longer have the card they offered" —
+ * describing a copy this very request just took — when the truth is that
+ * somebody already answered. And it would take `UserCard` locks it is only
+ * going to throw away, holding them against every other trade touching those
+ * rows for as long as it takes to discover it had already lost.
  *
  * The checks above the transaction are for a readable answer, not for
  * correctness — by the time they return, all three could be stale. The claim
