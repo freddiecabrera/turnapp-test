@@ -2,9 +2,29 @@ import type {
   Card as PrismaCard,
   Prisma,
   QrCode as PrismaQrCode,
+  TradeStatus as PrismaTradeStatus,
   User as PrismaUser,
 } from "@prisma/client";
-import type { Card, QrCode, Trade, User, UserSummary } from "@turnapp/shared";
+import type { Card, QrCode, Trade, TradeStatus, User, UserSummary } from "@turnapp/shared";
+
+/** True only when the two types are each assignable to the other. */
+type Exact<A, B> = [A] extends [B] ? ([B] extends [A] ? true : false) : false;
+
+/**
+ * `TradeStatus` in `packages/shared` must name exactly the Postgres enum's
+ * values — no more, no fewer.
+ *
+ * One direction was already covered: a shared type missing a value Prisma has
+ * breaks `status: trade.status` in `toPublicTrade` below, since the row can
+ * carry something the DTO has no room for. The other direction is silent — a
+ * shared type with an extra value assigns to the DTO fine, and the first thing
+ * to notice is a client switching on a status the database can never produce.
+ *
+ * A mutual `extends`, not a one-way one, is what makes it catch both. Written
+ * as `Exact<...>` rather than `type Mirrors<A extends B, B extends A>`, which
+ * reads better and is rejected outright: TS2313, circular constraint.
+ */
+const _tradeStatusParity: Exact<PrismaTradeStatus, TradeStatus> = true;
 
 /**
  * Turn a stored image filename into a path the clients can load.
