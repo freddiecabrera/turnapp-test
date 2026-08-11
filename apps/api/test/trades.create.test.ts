@@ -4,6 +4,8 @@ import {
   api,
   authedApi,
   copiesOf,
+  createUser,
+  grant,
   prisma,
   resetDatabase,
   twoTraders,
@@ -181,6 +183,28 @@ describe("POST /trades", () => {
       });
       expect(stored.fromUserId).toBe(alice.id);
       expect(stored.toUserId).toBe(bob.id);
+    });
+
+    it("cannot be used to send a trade as somebody else", async () => {
+      const { alice, bob, bobOnly, common } = await twoTraders();
+      // A third party so the forged trade is between two other people — the
+      // shape a self-trade check would not catch.
+      const carol = await createUser("carol");
+      await grant(carol.id, common.id);
+
+      // Every field here is valid *for bob*: he owns bobOnly, carol owns
+      // common. Trusting the body would create a trade bob never sent. Alice
+      // owns neither side of it, so the ownership check is what fires.
+      const res = await post(alice, {
+        fromUserId: bob.id,
+        toUserId: carol.id,
+        offeredCardId: bobOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "You don't have that card to offer." });
+      expect(await prisma.trade.count()).toBe(0);
     });
 
     it("allows a second, different offer to the same person", async () => {
