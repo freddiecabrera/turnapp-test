@@ -67,6 +67,43 @@ curl "http://localhost:8081/node_modules/expo-router/entry.bundle?platform=ios&d
 
 ---
 
+## Changing the data model
+
+Work through these before writing a migration. Each one exists because skipping it has already
+cost time on this repo.
+
+**1. Deleting a row destroys every column on it, not just the one you're reasoning about.**
+Before making anything delete a row, list that model's columns and grep each one for consumers.
+`UserCard` looks like `(userId, cardId, quantity)` until you notice `firstScannedAt`, which the
+admin renders as "First collected" *and* sorts the owners list by.
+
+**2. Changing a read is an API change.** `GET /cards` computes `owned: !!uc`. Anything that
+alters when rows exist silently alters that endpoint's answer. Grep the field across all four
+surfaces — `packages/shared` and `apps/mobile/src/types.ts` are separate copies and both drift.
+
+**3. Pick `onDelete` deliberately.** House style is `Cascade` (`UserCard.card`, `QrCode.card`).
+Deviating is fine, but say why in the migration or the PR — a silent `Restrict` will block an
+admin flow that already works.
+
+**4. Prisma's DSL doesn't cover everything.** Partial indexes, check constraints, and triggers
+have no schema syntax. Generate the migration, then hand-edit the SQL file to append them —
+that is supported and normal, not a hack.
+
+**5. Test the migration against a *fresh* database, not just yours.**
+`npm run db:reset && npm run api:setup` from the repo root. A migration that applies cleanly to
+an already-migrated database can still fail from empty.
+
+**6. Remember `api:migrate` is hardcoded to `--name init`** (quirk 3 above). Use the direct
+command.
+
+### While you're at it
+
+Kill processes by **port or PID**, never a broad `pkill -f <name>` — `pkill -f turnapp` matches
+the Docker container's process too and will take your database down with your API. Use
+`lsof -ti:4000 | xargs kill`. Data survives (the volume is named), but you'll lose time.
+
+---
+
 ## Verification
 
 **There is no test runner in this repo** — no `test` script in any workspace, no lint config.
