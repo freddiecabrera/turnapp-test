@@ -285,8 +285,17 @@ imply "state changed."
 
 ## API
 
-All routes on `appRouter` (`apps/api/src/routes/app.ts`), already behind `requireAuth`. Shapes
-follow the existing flat style (`/scan`, `/cards`, `/wallet`).
+Shapes follow the existing flat style (`/scan`, `/cards`, `/wallet`), and everything sits behind
+`requireAuth` the way `appRouter` already does.
+
+Split across two new routers rather than added to `routes/app.ts`. That file already carries
+seasons, cards, scan and wallet in 143 lines; adding eight trading and user endpoints would have
+roughly tripled it, and `routes/admin.ts` establishes that a separate router per concern is the
+house style. So: `routes/users.ts` for the two user reads, `routes/trades.ts` for the trades.
+
+Mount order matters. `appRouter` is mounted at `/` and applies `requireAuth` to everything that
+reaches it, so a router mounted after it never sees its own requests. Both new routers mount
+first.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
