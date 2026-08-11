@@ -26,9 +26,12 @@ app.get("/health", (_req, res) => res.json({ ok: true }));
 app.use("/auth", authRouter);
 app.use("/admin", adminRouter);
 app.use("/users", usersRouter);
-// Mounted last on purpose: `appRouter` sits on "/" and runs `requireAuth` for
-// every request that reaches it, so anything mounted after it would be answered
-// by that middleware before its own routes were consulted.
+// Mounted last as a preference, not a requirement. `appRouter` sits on "/" and
+// runs `requireAuth` for everything reaching it, but `requireAuth` calls
+// `next()` and none of `appRouter`'s own routes match `/users/...`, so the
+// request falls out of that router and Express carries on to the next layer
+// whichever order they mount in. Specific paths first just avoids running
+// `requireAuth` twice, and keeps an anonymous 401 coming from the owning router.
 app.use("/", appRouter);
 
 // Basic error handler so multer / async errors return JSON.

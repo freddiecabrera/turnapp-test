@@ -293,9 +293,13 @@ seasons, cards, scan and wallet in 143 lines; adding eight trading and user endp
 roughly tripled it, and `routes/admin.ts` establishes that a separate router per concern is the
 house style. So: `routes/users.ts` for the two user reads, `routes/trades.ts` for the trades.
 
-Mount order matters. `appRouter` is mounted at `/` and applies `requireAuth` to everything that
-reaches it, so a router mounted after it never sees its own requests. Both new routers mount
-first.
+Mount order is a preference here, not a constraint. `appRouter` is mounted at `/` and applies
+`requireAuth` to everything that reaches it — but `requireAuth` calls `next()`, and none of
+`appRouter`'s own routes match `/users/...` or `/trades/...`, so the request falls out of that
+router and Express carries on to the next layer. Either order answers correctly, with the same
+status codes. The new routers mount first anyway, for two small reasons: `requireAuth` then runs
+once per request instead of twice, and an anonymous request gets its 401 from the router that
+owns the path rather than from `appRouter`.
 
 Both new routers are built with `asyncRouter()` rather than `express.Router()`. Express 4 drops
 a handler's returned promise on the floor, so a rejection inside an `async` route is an
