@@ -114,6 +114,52 @@ export interface WalletResponse {
   transactions: PointsTransaction[];
 }
 
+/** A trade's lifecycle. Only PENDING trades can be acted on. */
+export type TradeStatus = "PENDING" | "ACCEPTED" | "DECLINED";
+
+/**
+ * A user as seen by somebody else. Deliberately smaller than `User`: no email,
+ * no points balance, nothing beyond what's needed to recognise a trading
+ * partner. `toPublicUser` is for the caller's own account and the admin views.
+ */
+export interface UserSummary {
+  id: string;
+  username: string;
+  userIdNumber: number;
+}
+
+export interface Trade {
+  id: string;
+  status: TradeStatus;
+  /**
+   * Which side of the trade the caller is on. The stored column names are
+   * sender-relative — `offeredCard` always comes from `fromUser` — so the same
+   * row reads inverted for the two parties. Clients use this to work out which
+   * card they're giving up rather than inferring it from the token.
+   */
+  direction: "sent" | "received";
+  /**
+   * Whether both sides still own their cards, so the trade could still go
+   * through. Derived at read time rather than stored, because several pending
+   * trades can legitimately name the same card and only some of them stay
+   * possible. `null` once a trade is accepted or declined, where it no longer
+   * means anything.
+   */
+  fulfillable: boolean | null;
+  fromUser: UserSummary;
+  toUser: UserSummary;
+  offeredCard: Card;
+  requestedCard: Card;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export interface CreateTradeRequest {
+  toUserId: string;
+  offeredCardId: string;
+  requestedCardId: string;
+}
+
 export interface AuthResponse {
   token: string;
   user: User;
