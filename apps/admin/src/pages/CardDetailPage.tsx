@@ -113,7 +113,10 @@ export function CardDetailPage({
         cardId: card.id,
         count: Number(count),
         pointsAwarded: Number(points),
-        batchLabel: batchLabel || undefined,
+        // Omitted rather than sent as `undefined`: the parameter is
+        // `batchLabel?: string`, and JSON.stringify drops an undefined value
+        // anyway, so the request on the wire is unchanged.
+        ...(batchLabel ? { batchLabel } : {}),
       });
       setPrintCodes(created);
       setBatchLabel("");
