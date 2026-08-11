@@ -25,6 +25,20 @@ const SEARCH_LIMIT = 20;
 const MAX_INT4 = 2147483647;
 
 /**
+ * Postgres rejects a null byte inside a `text` value outright — `22021 invalid
+ * byte sequence for encoding "UTF8": 0x00` — so a string carrying one cannot be
+ * queried with, only refused.
+ *
+ * The async boundary in `../async-router` already stops that rejection from
+ * killing the process, but a 500 is the wrong answer to input we can classify
+ * before touching the database. Refuse it at the edge and the 500 stays what it
+ * should be: a bug we didn't anticipate.
+ */
+function hasNullByte(value: string): boolean {
+  return value.includes("\0");
+}
+
+/**
  * Parse `q` as a user ID number, or return null when it isn't one.
  *
  * `userIdNumber` is an `Int`, so a query of "abc" has no business reaching that
@@ -53,7 +67,11 @@ function asUserIdNumber(q: string): number | null {
  * it. Don't fetch what must never be shown.
  */
 usersRouter.get("/search", async (req, res) => {
-  const q = String(req.query.q ?? "").trim();
+  const raw = String(req.query.q ?? "");
+  if (hasNullByte(raw)) {
+    return res.status(400).json({ error: "That search contains a character we can't look up." });
+  }
+  const q = raw.trim();
 
   // No query, no results. Returning every user here would be an address book.
   if (!q) return res.json([]);
@@ -95,6 +113,13 @@ usersRouter.get("/search", async (req, res) => {
  * returning the raw Prisma card breaks every image on a physical device.
  */
 usersRouter.get("/:id/cards", async (req, res) => {
+  // A path segment reaches Postgres just as a query string does, and a null
+  // byte in one is refused by the encoding rather than answered — see
+  // `hasNullByte`. No id we issue contains one, so this is never a real lookup.
+  if (hasNullByte(req.params.id)) {
+    return res.status(400).json({ error: "That isn't a valid user id." });
+  }
+
   // Only the existence of the user is in question here, so only the id is read.
   const user = await prisma.user.findUnique({
     where: { id: req.params.id },

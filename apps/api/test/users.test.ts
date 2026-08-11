@@ -141,6 +141,22 @@ describe("GET /users/search", () => {
     expect((res.body as UserSummary[]).length).toBeLessThanOrEqual(20);
   });
 
+  it("rejects a null byte in the query without dropping the process", async () => {
+    const { alice, bob } = await twoTraders();
+
+    const res = await authedApi(alice, "get", "/users/search?q=a%00b");
+
+    expect(res.status).toBe(400);
+    expect(typeof res.body.error).toBe("string");
+
+    // Postgres refuses 0x00 in a text value (22021). Unrejected it reached the
+    // driver, and the rejected promise took the whole API down with it — so the
+    // request that matters here is the next one.
+    const after = await authedApi(alice, "get", "/users/search?q=bob");
+    expect(after.status).toBe(200);
+    expect((after.body as UserSummary[]).map((u) => u.id)).toEqual([bob.id]);
+  });
+
   it("never returns an email address or a password hash", async () => {
     const { alice } = await twoTraders();
 
@@ -239,6 +255,20 @@ describe("GET /users/:id/cards", () => {
 
     expect(card.firstScannedAt).toEqual(expect.any(String));
     expect(new Date(card.firstScannedAt).toISOString()).toBe(card.firstScannedAt);
+  });
+
+  it("rejects a null byte in the id without dropping the process", async () => {
+    const { alice, bob } = await twoTraders();
+
+    const res = await authedApi(alice, "get", "/users/a%00b/cards");
+
+    expect(res.status).toBe(400);
+    expect(typeof res.body.error).toBe("string");
+
+    // A path segment reaches Postgres exactly as a query value does, and the
+    // same 22021 rejection killed the process before it was refused here.
+    const after = await authedApi(alice, "get", `/users/${bob.id}/cards`);
+    expect(after.status).toBe(200);
   });
 
   it("never returns an email address or a password hash", async () => {
