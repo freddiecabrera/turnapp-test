@@ -1,12 +1,20 @@
 import { PrismaClient } from "@prisma/client";
 import bcrypt from "bcryptjs";
 import { signToken } from "../src/auth";
+import { TEST_DATABASE_URL } from "./env";
 
 /**
- * Test-only Prisma client. Its DATABASE_URL is set to the test database by
- * vitest.config.ts, so importing this can never reach the dev database.
+ * Test-only Prisma client, bound to the test database at construction.
+ *
+ * The URL is passed explicitly rather than left to vitest.config.ts's
+ * `test.env`, which applies to worker processes only: a globalSetup or
+ * globalTeardown importing `resetDatabase` would otherwise get a client on the
+ * *dev* database and TRUNCATE it. Constructing with the URL makes reaching the
+ * dev database structurally impossible instead of merely unlikely.
  */
-export const prisma = new PrismaClient();
+export const prisma = new PrismaClient({
+  datasources: { db: { url: TEST_DATABASE_URL } },
+});
 
 /**
  * Wipe every application table between tests so cases are order-independent.

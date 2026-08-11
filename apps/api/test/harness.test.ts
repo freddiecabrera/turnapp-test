@@ -21,6 +21,22 @@ describe("test harness", () => {
     expect(Number(count)).toBe(0);
   });
 
+  it("has the hand-written constraints from the trades migration", async () => {
+    // `migrate deploy` would not have re-applied these after the hand-edit, so
+    // this also guards the global setup against regressing to it.
+    const constraints = await prisma.$queryRaw<Array<{ conname: string }>>`
+      SELECT conname FROM pg_constraint WHERE conrelid = '"Trade"'::regclass
+    `;
+    const names = constraints.map((c) => c.conname);
+    expect(names).toContain("Trade_no_self_trade");
+    expect(names).toContain("Trade_distinct_cards");
+
+    const indexes = await prisma.$queryRaw<Array<{ indexname: string }>>`
+      SELECT indexname FROM pg_indexes WHERE tablename = 'Trade'
+    `;
+    expect(indexes.map((i) => i.indexname)).toContain("Trade_one_pending_per_offer");
+  });
+
   it("builds two traders with overlapping collections", async () => {
     const { alice, bob, common, aliceOnly, dupe } = await twoTraders();
 

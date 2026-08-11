@@ -1,37 +1,35 @@
 import fs from "fs";
 import path from "path";
-import { config, parse } from "dotenv";
+import { parse } from "dotenv";
 
 /**
- * Resolve the test database URL from the repo-root .env.
+ * Resolve the dev and test database URLs from the repo-root .env file.
  *
- * Imported by both vitest.config.ts (to set DATABASE_URL for the workers) and
- * the global setup (to migrate), so the two can never disagree about which
- * database the suite points at.
+ * This module is evaluated in three environments: the Vitest config process
+ * (where DATABASE_URL still holds the dev value), the global setup (same), and
+ * each worker (where Vitest has already overwritten it with the test value).
+ * Both constants are therefore read from the FILE and never from process.env —
+ * consulting process.env inside a worker would make DEV_DATABASE_URL name the
+ * *test* database, collapsing the distinction the two constants exist to draw.
  *
- * Note this module is evaluated in two different environments: once in the
- * Vitest config process, where DATABASE_URL still holds the dev value, and
- * again inside each worker, where Vitest has already overwritten it with the
- * test value. So the dev URL is read from the FILE rather than from
- * process.env — otherwise both constants collapse to whatever is currently set.
+ * For the same reason the file is the sole source of truth, with no process.env
+ * fallback: a fallback only ever fires in the situation it would get wrong.
  */
 
 const ENV_PATH = path.resolve(__dirname, "../../../.env");
 
-// Side effect: load JWT_SECRET and friends for code under test.
-config({ path: ENV_PATH });
+const REMEDY =
+  "The test suite reads DATABASE_URL from the repo-root .env — " +
+  "run `cp .env.example .env` first (see AGENTS.md, quirk 2).";
 
-const fileUrl = fs.existsSync(ENV_PATH)
-  ? parse(fs.readFileSync(ENV_PATH)).DATABASE_URL
-  : undefined;
+if (!fs.existsSync(ENV_PATH)) {
+  throw new Error(`No .env file at ${ENV_PATH}. ${REMEDY}`);
+}
 
-const devUrl = fileUrl ?? process.env.DATABASE_URL;
+const devUrl = parse(fs.readFileSync(ENV_PATH)).DATABASE_URL;
 
 if (!devUrl) {
-  throw new Error(
-    "DATABASE_URL is not set. The test suite reads it from the repo-root .env — " +
-      "run `cp .env.example .env` first (see AGENTS.md, quirk 2)."
-  );
+  throw new Error(`${ENV_PATH} does not define DATABASE_URL. ${REMEDY}`);
 }
 
 /** The dev database, e.g. .../turnapp — never written to by tests. */
