@@ -761,7 +761,14 @@ describe("POST /trades/:id/accept", () => {
       // because nothing a human did to it.
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
       expect(await prisma.trade.count({ where: { status: "PENDING" } })).toBe(1);
-    });
+      // An explicit budget, like every other concurrency case in this file, and
+      // for a sharper reason: on the deadlock path this test's duration is set
+      // by Postgres's `deadlock_timeout`, not by anything it does. That defaults
+      // to 1s — measured here at 1060–1079ms over eight runs, deadlocking 8/8 —
+      // which sits just inside vitest's 5s default and outside it on any server
+      // where the setting has been raised. Bounding it explicitly keeps a
+      // database configuration change from failing a test about trade logic.
+    }, 20_000);
   });
 
   /**
