@@ -16,29 +16,45 @@ export const prisma = new PrismaClient({
   datasources: { db: { url: TEST_DATABASE_URL } },
 });
 
+// Fixture counters, kept unique per test rather than per run — see resetDatabase.
+let userSeq = 0;
+let cardSeq = 0;
+
 /**
  * Wipe every application table between tests so cases are order-independent.
  *
  * Truncation rather than a wrapping transaction: the code under test opens its
  * own `$transaction`, and nesting would change the very semantics we are
- * verifying. `_prisma_migrations` is deliberately left alone.
+ * verifying.
+ *
+ * The table list is read from the catalogue rather than hardcoded. A hardcoded
+ * list silently stops covering any future model that doesn't happen to FK into
+ * one of the named tables, and that leaks rows across every test in the suite.
+ * One cheap catalogue query per test buys immunity to that.
+ * `_prisma_migrations` is deliberately left alone.
  */
 export async function resetDatabase() {
-  await prisma.$executeRawUnsafe(`
-    TRUNCATE TABLE
-      "Trade",
-      "UserCard",
-      "PointsTransaction",
-      "QrCode",
-      "Card",
-      "Season",
-      "User"
-    RESTART IDENTITY CASCADE
-  `);
-}
+  const tables = await prisma.$queryRaw<Array<{ table_name: string }>>`
+    SELECT table_name
+    FROM information_schema.tables
+    WHERE table_schema = 'public'
+      AND table_type = 'BASE TABLE'
+      AND table_name <> '_prisma_migrations'
+  `;
 
-let userSeq = 0;
-let cardSeq = 0;
+  if (tables.length > 0) {
+    const list = tables.map((t) => `"${t.table_name}"`).join(", ");
+    // No RESTART IDENTITY: every primary key is a cuid TEXT default, so there
+    // is not a sequence in the schema for it to restart.
+    await prisma.$executeRawUnsafe(`TRUNCATE TABLE ${list} CASCADE`);
+  }
+
+  // The fixture counters above are part of the state a test starts from, so
+  // they reset with the tables — otherwise the values a case sees would depend
+  // on how many cases ran before it.
+  userSeq = 0;
+  cardSeq = 0;
+}
 
 export async function createUser(
   username: string,
