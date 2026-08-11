@@ -30,7 +30,7 @@ Prerequisites: Node ≥ 20, Docker running, Xcode if you want the iOS simulator.
 
 ---
 
-## The five things that will trip you up
+## The six things that will trip you up
 
 **1. `apps/mobile` is not in the npm workspace.**
 `package.json` lists `packages/*`, `apps/api`, `apps/admin` — mobile is deliberately excluded
@@ -58,7 +58,16 @@ cd apps/api && npx dotenv -e ../../.env -- npx prisma migrate dev --name your_mi
 `assets/SZN 1_cards/` into that directory. So `GET /static/cards/*.png` 404s on a fresh clone
 until `api:seed` has run. That is expected, not a bug — don't debug it.
 
-**5. Metro's entry point is `expo-router/entry`, not `index`.**
+**5. Adding any dependency to `apps/mobile` fails with ERESOLVE.**
+`@expo/metro-runtime` optionally peers on `react-dom`, npm resolves `19.2.8`, and that demands
+`react@^19.2.8` — but the app pins `react@19.1.0`. Pre-existing, not something you broke. Use
+`--legacy-peer-deps` for the install and do **not** "fix" it by bumping the app's React.
+
+Related: `npm --prefix apps/mobile install` succeeds on a cold run and then **fails on the
+second consecutive run** with the same ERESOLVE. Also pre-existing, verified against an
+untouched baseline.
+
+**6. Metro's entry point is `expo-router/entry`, not `index`.**
 To force a full bundle compile without a simulator:
 ```bash
 curl "http://localhost:8081/node_modules/expo-router/entry.bundle?platform=ios&dev=true"
@@ -106,16 +115,44 @@ the Docker container's process too and will take your database down with your AP
 
 ## Verification
 
-**There is no test runner in this repo** — no `test` script in any workspace, no lint config.
-Do not go looking for one. The available verification surface is:
+One command runs the whole gate:
+
+```bash
+npm run verify   # api typecheck + mobile typecheck + admin build + tests
+```
+
+Or individually:
 
 ```bash
 npm --workspace @turnapp/api run typecheck     # tsc --noEmit
 npm --prefix apps/mobile run typecheck         # tsc --noEmit
 npm --workspace @turnapp/admin run build       # vite build
+npm test                                       # vitest, API integration tests
 ```
 
-All three pass on a clean checkout. Treat them as the regression gate.
+**Generate the Prisma client first on a fresh checkout**, or the API typecheck fails with
+around a dozen errors like `Module '"@prisma/client"' has no exported member 'Card'`, plus
+cascading implicit-`any`s. They point at source files and read like real type bugs; they are
+not. The client is generated into `node_modules`, so a fresh clone or a new worktree has none:
+
+```bash
+npm --workspace @turnapp/api run prisma:generate
+```
+
+`npm run api:setup` includes this, but running the typecheck before setup does not.
+
+### Tests
+
+`npm test` runs Vitest against a **separate `turnapp_test` database** on the same container —
+dev data is never touched. `prisma migrate deploy` creates it on first run, so
+`npm run db:up` is the only prerequisite.
+
+These are integration tests against real Postgres, not unit tests with a mocked Prisma client:
+the risk in this codebase is transaction semantics, and a mock would only test the mock. Test
+files run sequentially because they share one database and truncate between cases rather than
+wrapping in a transaction — the code under test opens its own.
+
+The mobile app has its own Jest suite: `npm --prefix apps/mobile run test`.
 
 For API behaviour, curl against a running server:
 
