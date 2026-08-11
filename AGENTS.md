@@ -124,7 +124,7 @@ npm run verify   # api typecheck + mobile typecheck + admin build + tests
 Or individually:
 
 ```bash
-npm --workspace @turnapp/api run typecheck     # tsc --noEmit
+npm --workspace @turnapp/api run typecheck     # tsc --noEmit, src + prisma + test
 npm --prefix apps/mobile run typecheck         # tsc --noEmit
 npm --workspace @turnapp/admin run build       # vite build
 npm test                                       # vitest, API integration tests
@@ -144,15 +144,27 @@ npm --workspace @turnapp/api run prisma:generate
 ### Tests
 
 `npm test` runs Vitest against a **separate `turnapp_test` database** on the same container —
-dev data is never touched. `prisma migrate deploy` creates it on first run, so
-`npm run db:up` is the only prerequisite.
+dev data is never touched. The global setup runs `prisma migrate reset --force --skip-seed`
+against that database, which creates it on first run and rebuilds it from the migration files
+on every run. Rebuilding rather than `migrate deploy`-ing is deliberate: `deploy` keys off a
+migration's *name*, so it ignores the hand-edits to already-applied migration SQL that
+"Changing the data model" step 4 tells you to make.
+
+Prerequisites are the full cold start, not just Docker: `.env`, `npm install`,
+`prisma:generate` (see the note ten lines above), and `npm run db:up`.
 
 These are integration tests against real Postgres, not unit tests with a mocked Prisma client:
 the risk in this codebase is transaction semantics, and a mock would only test the mock. Test
 files run sequentially because they share one database and truncate between cases rather than
 wrapping in a transaction — the code under test opens its own.
 
-The mobile app has its own Jest suite: `npm --prefix apps/mobile run test`.
+Routes are exercised over HTTP with supertest against the app exported from
+`apps/api/src/app.ts`, in-process on an ephemeral port — `src/index.ts` is only the `listen`
+call, so importing the app never collides with a dev server on 4000. `test/helpers.ts` has
+`api()` and `authedApi(user, method, url)`.
+
+The mobile app has no `test` script on this branch; its Jest suite
+(`npm --prefix apps/mobile run test`) arrives with the `feat/mobile-test-harness` branch.
 
 For API behaviour, curl against a running server:
 
