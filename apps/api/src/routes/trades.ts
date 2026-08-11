@@ -1,6 +1,6 @@
 import { Prisma } from "@prisma/client";
-import { Router } from "express";
 import type { CreateTradeRequest, Trade } from "@turnapp/shared";
+import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
 import { toPublicTrade } from "../serialize";
@@ -13,8 +13,15 @@ import { toPublicTrade } from "../serialize";
  * mounted after it never sees its own requests. Same auth posture though: the
  * whole router is behind `requireAuth` and the sender is always
  * `req.auth.userId`, never anything the caller put in the body.
+ *
+ * Built with `asyncRouter()`, never `express.Router()` — AGENTS.md requires it
+ * of every router here. Express 4 discards the promise an `async` handler
+ * returns, so a rejection inside one is an unhandled rejection and Node 20
+ * exits on it: a single malformed request would take the API down for
+ * everybody. See `../async-router` for why the wrapping happens at
+ * registration rather than a handler at a time.
  */
-export const tradesRouter = Router();
+export const tradesRouter = asyncRouter();
 
 tradesRouter.use(requireAuth);
 
@@ -76,12 +83,14 @@ async function ownsAtLeastOne(userId: string, cardId: string): Promise<boolean> 
  * these checks are what turns a violation into a sentence a person can read.
  * `apps/mobile/src/api.ts` throws `body.error` straight into the UI.
  *
- * The whole handler sits in a try/catch because Express 4 does not route async
- * rejections to the error middleware — an uncaught rejection here takes the
- * process down rather than returning a 500. `toPublicTrade` throws for a
- * non-participant viewer, which cannot happen on this path (the viewer is the
- * sender by construction), and Prisma can still raise on a connection fault.
- * Neither is allowed to escape.
+ * The try/catch is what turns the duplicate race into a 409 rather than a 500;
+ * `asyncRouter` is the backstop underneath it, carrying anything this handler
+ * doesn't recognise to the error middleware instead of out of the process. The
+ * unrecognised cases are real: `toPublicTrade` throws for a non-participant
+ * viewer, which cannot happen on this path (the viewer is the sender by
+ * construction), and Prisma can still raise on a connection fault. Answering
+ * them here keeps the copy about sending an offer, which is what the caller was
+ * trying to do.
  */
 tradesRouter.post("/", async (req, res) => {
   // Every value stays `unknown` until `readId` has vouched for it. The shape is
