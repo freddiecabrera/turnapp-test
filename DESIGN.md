@@ -331,7 +331,7 @@ Matches the existing `{ "error": "..." }` convention. `apps/mobile/src/api.ts` t
 export type TradeStatus = "PENDING" | "ACCEPTED" | "DECLINED";
 
 /** A user as seen by someone else — no email, no internal fields. */
-export interface PublicUser {
+export interface UserSummary {
   id: string;
   username: string;
   userIdNumber: number;
@@ -342,10 +342,10 @@ export interface Trade {
   status: TradeStatus;
   /** Relative to the caller. "offered" is always from fromUser. */
   direction: "sent" | "received";
-  /** Pending trades only: are both sides still owned? */
-  fulfillable: boolean;
-  fromUser: PublicUser;
-  toUser: PublicUser;
+  /** Both sides still own their cards. null once accepted or declined. */
+  fulfillable: boolean | null;
+  fromUser: UserSummary;
+  toUser: UserSummary;
   offeredCard: Card;
   requestedCard: Card;
   createdAt: string;
@@ -358,6 +358,14 @@ export interface CreateTradeRequest {
   requestedCardId: string;
 }
 ```
+
+Named `UserSummary` rather than `PublicUser` because the existing `toPublicUser` returns the
+full `User` — including the email address — for the caller's own account and the admin views.
+A `PublicUser` type sitting next to a `toPublicUser` that returns something larger is a trap.
+`toUserSummary` is the one to reach for whenever one user is shown to another.
+
+`fulfillable` is nullable rather than boolean: it's only meaningful while a trade is pending,
+and reporting `false` on a completed trade would read as "this failed."
 
 `GET /trades` returns a flat `Trade[]` ordered `createdAt desc` rather than
 `{ sent: [], received: [] }` — one shape to maintain, and the board renders
@@ -373,12 +381,22 @@ Skip it and every card image in the trading UI silently breaks on a physical dev
 
 ---
 
-## Still open
+## Resolved since first draft
 
-- Delete the `UserCard` row at zero, or change `GET /cards` to `owned: quantity > 0`?
-  (leaning delete — don't change shipped read semantics in someone else's codebase)
-- Guard against duplicate identical pending trades? Cheap in the route; a real guarantee needs
-  a partial unique index, which Prisma can't express and would need raw SQL in the migration.
+**Delete the `UserCard` row at zero** rather than changing `GET /cards` to `owned: quantity > 0`.
+Keeping zero-quantity rows would preserve `firstScannedAt`, but it needs `quantity > 0` filters
+in four places across shipped endpoints — `GET /cards`, `GET /cards/:id`, the admin owners list
+(where a zero row would appear as an "owner"), and the admin user-collection view. Changing read
+semantics in someone else's codebase is the larger risk. The cost is real but small:
+`firstScannedAt` is admin-only, rendered in exactly one column and used as one sort key, with no
+mobile surface at all. Per-copy instance rows would preserve it properly, which is another point
+for that follow-up.
+
+**Guard duplicate pending trades at both levels.** A `findFirst` in the route for a readable
+409, plus a partial unique index — `WHERE status = 'PENDING'` — appended as raw SQL to the
+migration for the actual guarantee. Partial so a declined trade can still be re-proposed. The
+same migration adds CHECK constraints for self-trade and same-card-both-sides: unlike ownership,
+those are genuine invariants, so the database is the right place for them.
 
 ## Out of scope, one line each in `SOLUTION.md`
 
