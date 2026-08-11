@@ -3,6 +3,8 @@ import type { OwnedCard, UserSummary } from "@turnapp/shared";
 import {
   api,
   authedApi,
+  createCard,
+  createSeason,
   createUser,
   grant,
   prisma,
@@ -139,6 +141,23 @@ describe("GET /users/search", () => {
     const res = await authedApi(alice, "get", "/users/search?q=partner");
 
     expect((res.body as UserSummary[]).length).toBeLessThanOrEqual(20);
+  });
+
+  it("orders username matches by username, ascending", async () => {
+    const caller = await createUser("caller");
+    // Created out of alphabetical order on purpose: with no `orderBy` these
+    // come back in insertion order, which is the shape this rules out.
+    await createUser("zeta-partner");
+    await createUser("alpha-partner");
+    await createUser("mid-partner");
+
+    const res = await authedApi(caller, "get", "/users/search?q=partner");
+
+    expect((res.body as UserSummary[]).map((u) => u.username)).toEqual([
+      "alpha-partner",
+      "mid-partner",
+      "zeta-partner",
+    ]);
   });
 
   it("puts an exact ID match first, where the cap cannot drop it", async () => {
@@ -338,13 +357,47 @@ describe("GET /users/:id/cards", () => {
     expect(card?.imageUrl).toMatch(/^\/static\/cards\/.+\.png$/);
   });
 
-  it("includes firstScannedAt as an ISO string", async () => {
-    const { alice, bob } = await twoTraders();
+  it("sends firstScannedAt as the stored instant in ISO-8601 form", async () => {
+    const { alice, bob, common } = await twoTraders();
+    const row = await prisma.userCard.findUnique({
+      where: { userId_cardId: { userId: bob.id, cardId: common.id } },
+    });
 
-    const [card] = (await authedApi(alice, "get", `/users/${bob.id}/cards`)).body as OwnedCard[];
+    const cards = (await authedApi(alice, "get", `/users/${bob.id}/cards`)).body as OwnedCard[];
+    const card = cards.find((c) => c.id === common.id);
 
-    expect(card.firstScannedAt).toEqual(expect.any(String));
-    expect(new Date(card.firstScannedAt).toISOString()).toBe(card.firstScannedAt);
+    // Deliberately not called "…as an ISO string": `res.json()` serializes a
+    // Date to byte-identical characters, so nothing observable over HTTP can
+    // tell `.toISOString()` apart from handing the Date to the serializer.
+    // What is worth pinning is the wire format and the value — the string type
+    // itself is the typechecker's job, not this test's.
+    expect(card?.firstScannedAt).toBe(row!.firstScannedAt.toISOString());
+    expect(card?.firstScannedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+  });
+
+  it("orders the collection by card number, ascending", async () => {
+    const alice = await createUser("alice");
+    const bob = await createUser("bob");
+    const season = await createSeason();
+    const [first, second, third] = [
+      await createCard(season.id, "First"),
+      await createCard(season.id, "Second"),
+      await createCard(season.id, "Third"),
+    ];
+    // The fixture numbers cards in creation order, so creation order and card
+    // number would agree and an unsorted query would pass anyway. Shuffle them.
+    await prisma.card.update({ where: { id: first.id }, data: { cardNumber: "30" } });
+    await prisma.card.update({ where: { id: second.id }, data: { cardNumber: "10" } });
+    await prisma.card.update({ where: { id: third.id }, data: { cardNumber: "20" } });
+    await grant(bob.id, first.id);
+    await grant(bob.id, second.id);
+    await grant(bob.id, third.id);
+
+    const res = await authedApi(alice, "get", `/users/${bob.id}/cards`);
+
+    const cards = res.body as OwnedCard[];
+    expect(cards.map((c) => c.cardNumber)).toEqual(["10", "20", "30"]);
+    expect(cards.map((c) => c.id)).toEqual([second.id, third.id, first.id]);
   });
 
   it("rejects a null byte in the id without dropping the process", async () => {
