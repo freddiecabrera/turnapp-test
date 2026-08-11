@@ -446,9 +446,19 @@ tradesRouter.post("/", async (req, res) => {
       include: TRADE_WITH_PARTIES,
     });
 
-    // `true`, not `null`. Both ownership checks just passed, so this trade is
-    // fulfillable as of right now — and `null` means "not applicable", which
-    // clients read as an already-answered trade.
+    // `true`, not `null`. Both ownership checks passed, which is the strongest
+    // thing this endpoint can say — and not quite "as of right now": the two
+    // reads and this insert are three statements in three implicit
+    // transactions, nothing holds a lock across them, and an accept elsewhere
+    // draining the last copy in that window makes this `true` where the next
+    // board read says `false`.
+    //
+    // That is the derived value behaving as designed rather than a gap to
+    // close. `GET /trades` recomputes it on every request so a stale `true`
+    // corrects itself the moment anyone looks, and nothing rests on it being
+    // fresh: accept re-verifies ownership atomically and refuses regardless of
+    // what this said. `null` is not the safer answer either — it means "not
+    // applicable", which clients read as an already-answered trade.
     const dto: Trade = toPublicTrade(created, fromUserId, true);
     return res.status(201).json(dto);
   } catch (e) {
