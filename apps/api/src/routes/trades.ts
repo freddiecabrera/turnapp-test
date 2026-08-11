@@ -622,8 +622,20 @@ tradesRouter.post("/:id/decline", async (req, res) => {
     return res.status(409).json({ error: ALREADY_ANSWERED });
   }
 
+  // `toUserId` is in the claim as well as in the 403 above, and the two are not
+  // redundant. The check above is a read, so what it authorized is a fact about
+  // a row as it looked a moment ago; this `where` is evaluated by Postgres
+  // against the row it is about to write, under the lock it takes to write it.
+  // That is the only place an authorization decision and the write it permits
+  // are atomic with each other. It costs nothing — the row is being located by
+  // primary key regardless — and it stops this route's correctness from resting
+  // on `Trade.toUserId` never being updatable, which is true of the schema
+  // today and is not a thing this handler knows.
+  //
+  // `status` is the half that arbitrates the race: whoever flips PENDING wins,
+  // and the loser matches nothing.
   const claim = await prisma.trade.updateMany({
-    where: { id: trade.id, status: "PENDING" },
+    where: { id: trade.id, status: "PENDING", toUserId: viewerId },
     data: { status: "DECLINED", respondedAt: new Date() },
   });
   if (claim.count === 0) return res.status(409).json({ error: ALREADY_ANSWERED });
