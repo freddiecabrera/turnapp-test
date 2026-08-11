@@ -707,6 +707,73 @@ describe("POST /trades", () => {
   });
 
   /**
+   * The other half of that catch: what it says when the failure is *not* one it
+   * recognises.
+   *
+   * `app.ts`'s error middleware argues at length for a fixed sentence and never
+   * `err.message`, because a rejected Prisma query stringifies to the failing
+   * call and an absolute path into the source tree. This handler answers its own
+   * 500 rather than rethrowing, so that argument has to hold here too — and
+   * until this case existed, nothing checked that it did. A handler returning
+   * `String(e.message)`, or a 200 with an empty body, passed the whole suite.
+   *
+   * Reaching it needs a real database failure that is not `P2002`, which the
+   * five checks above are quite good at preventing. A foreign key is the way in:
+   * the recipient is deleted in a transaction that stays open, so every read the
+   * handler makes still sees him — READ COMMITTED shows it the committed row —
+   * and the first statement that has to take a lock on `User` is the INSERT's own
+   * foreign-key check. It parks there until the delete commits, then fails with
+   * `P2003` on a row that no longer exists.
+   *
+   * Same machinery as the P2002 case above, and the same reason for it: polling
+   * for the blocked backend asserts the handler reached the insert, rather than
+   * sleeping and hoping.
+   */
+  describe("500 — a failure the handler didn't plan for", () => {
+    it("answers the fixed sentence, never the database's message", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+
+      const holdingOpen = prisma.$transaction(
+        async (tx) => {
+          // Uncommitted. Cascades take his UserCard rows with him, so this also
+          // proves the ownership reads saw the pre-delete snapshot: had they
+          // seen the delete, the request would have 400d long before the insert.
+          await tx.user.delete({ where: { id: bob.id } });
+
+          const inflight = inFlight(
+            post(alice, {
+              toUserId: bob.id,
+              offeredCardId: aliceOnly.id,
+              requestedCardId: bobOnly.id,
+            })
+          );
+          await waitForLockWaiters(1);
+          return { inflight };
+        },
+        { timeout: 20000, maxWait: 10000 }
+      );
+
+      const res = await (await holdingOpen).inflight;
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: "Something went wrong sending that offer." });
+      // Nothing derived from the error. A Prisma message carries the failing
+      // query, the absolute path of the file that ran it, and the lines around
+      // it — none of which a client is entitled to.
+      expect(res.text).not.toContain("prisma.");
+      expect(res.text).not.toContain("/Users/");
+      expect(res.text).not.toContain("Invalid `");
+      expect(res.text).not.toContain("Foreign key");
+
+      // The insert is the statement that failed, so nothing may have landed.
+      expect(await prisma.trade.count()).toBe(0);
+
+      const health = await api().get("/health");
+      expect(health.status).toBe(200);
+    }, 20_000);
+  });
+
+  /**
    * The same three rules, asserted against the schema instead of the handler.
    *
    * DESIGN.md calls this belt and braces: the CHECK constraints and the partial
