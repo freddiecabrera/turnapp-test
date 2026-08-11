@@ -20,6 +20,9 @@ model User {
   transactions PointsTransaction[]
   scannedCodes QrCode[]
 
+  tradesSent     Trade[] @relation("TradesSent")
+  tradesReceived Trade[] @relation("TradesReceived")
+
   createdAt DateTime @default(now())
 }
 
@@ -47,6 +50,9 @@ model Card {
 
   owners  UserCard[]
   qrCodes QrCode[]
+
+  tradesOffered   Trade[] @relation("TradesOffered")
+  tradesRequested Trade[] @relation("TradesRequested")
 
   createdAt DateTime @default(now())
 }
@@ -87,4 +93,46 @@ model QrCode {
   createdAt     DateTime  @default(now())
 
   @@index([batchId])
+}
+
+enum TradeStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+}
+
+// A single-card-for-single-card trade request between two users. Cards only
+// move when the recipient accepts.
+//
+// This references Card rather than UserCard on purpose. UserCard stores a
+// quantity, not per-copy rows, so there is no individual card to point at —
+// and its row is deleted when the last copy leaves, which would drag trade
+// history with it. Ownership is therefore verified inside the accept
+// transaction rather than guaranteed by a foreign key. See DESIGN.md.
+//
+// "offered" is always relative to fromUser. The API layer tags each trade with
+// a viewer-relative direction so clients never have to invert it themselves.
+model Trade {
+  id              String      @id @default(cuid())
+
+  fromUser        User        @relation("TradesSent", fields: [fromUserId], references: [id], onDelete: Cascade)
+  fromUserId      String
+  toUser          User        @relation("TradesReceived", fields: [toUserId], references: [id], onDelete: Cascade)
+  toUserId        String
+
+  offeredCard     Card        @relation("TradesOffered", fields: [offeredCardId], references: [id], onDelete: Cascade)
+  offeredCardId   String
+  requestedCard   Card        @relation("TradesRequested", fields: [requestedCardId], references: [id], onDelete: Cascade)
+  requestedCardId String
+
+  status          TradeStatus @default(PENDING)
+
+  createdAt       DateTime    @default(now())
+  respondedAt     DateTime?
+
+  // The board's only two queries: my incoming and my outgoing, by status.
+  @@index([toUserId, status])
+  @@index([fromUserId, status])
+  // A partial unique index preventing duplicate PENDING trades is appended as
+  // raw SQL in the migration — Prisma has no syntax for partial indexes.
 }
