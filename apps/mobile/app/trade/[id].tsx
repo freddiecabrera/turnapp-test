@@ -459,9 +459,6 @@ export default function TradeReview() {
           // strings is what keeps the two surfaces saying the same thing.
           <View style={styles.actions}>
             <Text style={styles.status}>{statusLine(trade)}</Text>
-            {sent && trade.status === "PENDING" && (
-              <Text style={styles.hint}>{copy.board.sentInert}</Text>
-            )}
             <View style={styles.actionGap} />
             <PrimaryButton label={copy.review.backToBoard} onPress={goBack} />
           </View>

@@ -90,12 +90,6 @@ export const copy = {
     // stays PENDING forever unless answered. One short line. No interpolation.
     unfulfillable: "This can no longer be completed.",
 
-    // CONSTRAINT: shown on every `sent` row. A sent trade has no action at all —
-    // there is no cancel or withdraw endpoint and the sender cannot decline
-    // their own offer. This exists so an inert row reads as deliberately inert
-    // rather than as a broken button. Very short. No interpolation.
-    sentInert: "Nothing to do here.",
-
     // CONSTRAINT: the viewer has never been in a trade at all. Offers the way
     // in. `title` one short line, `body` at most two, `action` a button label of
     // two or three words. No interpolation.

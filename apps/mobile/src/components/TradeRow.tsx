@@ -24,11 +24,6 @@ export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => voi
   const unfulfillable = isUnfulfillable(trade);
   const partner = partnerOf(trade);
 
-  // An outgoing offer still waiting on an answer is the one place someone will
-  // hunt for a cancel button, so that is where the inert note belongs. On an
-  // answered outgoing row the status line already says there is nothing to do.
-  const showInertNote = trade.direction === "sent" && trade.status === "PENDING";
-
   const dateLabel = tradeDateLabel(trade);
 
   const body = (
@@ -57,13 +52,6 @@ export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => voi
         <View style={styles.note}>
           <Ionicons name="alert-circle-outline" size={14} color={colors.grey} />
           <Text style={styles.noteText}>{copy.board.unfulfillable}</Text>
-        </View>
-      )}
-
-      {showInertNote && (
-        <View style={styles.note}>
-          <Ionicons name="lock-closed-outline" size={14} color={colors.grey} />
-          <Text style={styles.noteText}>{copy.board.sentInert}</Text>
         </View>
       )}
     </>
