@@ -1,9 +1,9 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
-  FlatList,
   Pressable,
   RefreshControl,
+  SectionList,
   StyleSheet,
   Text,
   View,
@@ -15,6 +15,7 @@ import { TradeRow } from "./TradeRow";
 import { api, messageFor } from "../api";
 import { copy, fill } from "../copy";
 import { colors, fonts, radius } from "../theme";
+import { BOARD_SECTIONS, sectionOf, type BoardSection } from "../trade";
 import type { Trade } from "../types";
 
 /**
@@ -27,17 +28,22 @@ import type { Trade } from "../types";
  *
  * Backed solely by `GET /trades`, which takes no parameters and returns every
  * trade the viewer has ever been in — both directions, every status, ordered
- * `createdAt DESC, id DESC`. So the filter below is client-side, there is no
- * pagination, and the list is deliberately *not* re-sorted: an old trade
- * answered today stays where its creation date puts it, which is the API's
- * ordering and not an oversight.
+ * `createdAt DESC, id DESC`. So the grouping below is client-side and there is
+ * no pagination. Within a section the API's ordering is preserved untouched: an
+ * old trade answered today stays where its creation date puts it, which is
+ * deliberate and not an oversight.
+ *
+ * **Why sections rather than filter pills.** This panel used to stack an
+ * all/incoming/outgoing pill row, a black pending-count badge and an outlined
+ * "start a trade" pill above the list — three rows of chrome under the
+ * collectibles pills, four controls, three of them wearing the same shape, and
+ * roughly half the screen gone before the first trade. Two of those rows are
+ * now one thing: the list groups by what the viewer can do about a trade, and
+ * each group's header carries its own count. That answers the question people
+ * actually open this screen with — what needs me? — which the direction filter
+ * could not ask, because "incoming" mixed the one unanswered offer in with
+ * every incoming trade already settled.
  */
-
-const FILTERS = ["all", "incoming", "outgoing"] as const;
-type Filter = (typeof FILTERS)[number];
-
-/** `incoming`/`outgoing` are the viewer's words for the API's `received`/`sent`. */
-const FILTER_DIRECTION = { incoming: "received", outgoing: "sent" } as const;
 
 export function TradingBoard() {
   const router = useRouter();
@@ -49,7 +55,6 @@ export function TradingBoard() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<Filter>("all");
 
   // Focus and pull-to-refresh can both be in flight at once, and without this
   // the slower response wins regardless of which was asked for last — an older
@@ -94,44 +99,53 @@ export function TradingBoard() {
 
   const startTrade = useCallback(() => router.push("/trade/new"), [router]);
 
-  const visible = useMemo(() => {
-    if (!trades || filter === "all") return trades ?? [];
-    return trades.filter((t) => t.direction === FILTER_DIRECTION[filter]);
-  }, [trades, filter]);
+  /**
+   * The board, grouped and counted.
+   *
+   * Built by walking the list once in the order the API sent it, so each
+   * section inherits `createdAt DESC` for free. An empty section is dropped
+   * rather than drawn with a zero — a header reading "needs you · 0" is a row
+   * of chrome saying nothing, which is the thing this layout set out to remove.
+   */
+  const sections = useMemo(() => {
+    const grouped: Record<BoardSection, Trade[]> = { needsYou: [], waiting: [], history: [] };
+    for (const trade of trades ?? []) grouped[sectionOf(trade)].push(trade);
 
-  // A pending count, not an unread one. The API has no seen/read field, so this
-  // stays lit until the trade is actually answered — faking a seen state would
-  // mean inventing a fact the server cannot confirm.
-  const pendingIncoming = useMemo(
-    () =>
-      (trades ?? []).filter((t) => t.direction === "received" && t.status === "PENDING").length,
-    [trades]
-  );
+    return BOARD_SECTIONS.filter((key) => grouped[key].length > 0).map((key) => ({
+      key,
+      title: fill(copy.board.sections[key], { count: grouped[key].length }),
+      data: grouped[key],
+    }));
+  }, [trades]);
 
-  const pills = (
-    <View style={styles.pills}>
-      {FILTERS.map((f) => (
-        <Pressable
-          key={f}
-          onPress={() => setFilter(f)}
-          style={[styles.pill, filter === f && styles.pillActive]}
-        >
-          <Text style={[styles.pillText, filter === f && styles.pillTextActive]}>
-            {copy.board.filters[f]}
-          </Text>
-        </Pressable>
-      ))}
-    </View>
+  /**
+   * The way into a new trade, from a board that already has trades on it.
+   *
+   * Floating rather than in the flow: this is the one control on the panel that
+   * creates something, it is the same action in every state, and as a row above
+   * the list it both scrolled away and sat visually below the two filled black
+   * pills that outranked it. A round filled button over the list gives it one
+   * permanent home, within thumb reach, competing with nothing.
+   *
+   * The empty state keeps its full-width button instead — there is no list for
+   * this to float over, and an empty board's whole job is to offer the way in.
+   */
+  const fab = (
+    <Pressable
+      onPress={startTrade}
+      accessibilityRole="button"
+      accessibilityLabel={copy.board.startTrade}
+      style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
+    >
+      <Ionicons name="add" size={30} color={colors.white} />
+    </Pressable>
   );
 
   // ---- First load: nothing to show yet ----
   if (loading && trades === null) {
     return (
-      <View style={styles.wrap}>
-        {pills}
-        <View style={styles.centered}>
-          <ActivityIndicator color={colors.black} />
-        </View>
+      <View style={styles.centered}>
+        <ActivityIndicator color={colors.black} />
       </View>
     );
   }
@@ -141,117 +155,84 @@ export function TradingBoard() {
   // whole panel is the error — and the way into a new trade still has to work.
   if (trades === null) {
     return (
-      <View style={styles.wrap}>
-        {pills}
-        <View style={styles.centered}>
-          <Ionicons name="cloud-offline-outline" size={40} color={colors.grey} />
-          <Text style={styles.emptyTitle}>{copy.board.error.title}</Text>
-          <Text style={styles.emptyBody}>{error ?? copy.board.error.body}</Text>
-          <View style={styles.emptyActions}>
-            <PrimaryButton label={copy.board.error.retry} onPress={retry} />
-            <View style={styles.actionGap} />
-            <PrimaryButton
-              label={copy.board.error.action}
-              variant="outline"
-              onPress={startTrade}
-            />
-          </View>
+      <View style={styles.centered}>
+        <Ionicons name="cloud-offline-outline" size={40} color={colors.grey} />
+        <Text style={styles.emptyTitle}>{copy.board.error.title}</Text>
+        <Text style={styles.emptyBody}>{error ?? copy.board.error.body}</Text>
+        <View style={styles.emptyActions}>
+          <PrimaryButton label={copy.board.error.retry} onPress={retry} />
+          <View style={styles.actionGap} />
+          <PrimaryButton label={copy.board.error.action} variant="outline" onPress={startTrade} />
         </View>
       </View>
     );
   }
 
-  // ---- Populated, or one of the two empties ----
-  const neverTraded = trades.length === 0;
+  // ---- Never traded at all ----
+  // The way in is the whole point of the state, so it is a full-width button
+  // and not the floating one.
+  if (trades.length === 0) {
+    return (
+      <View style={styles.centered}>
+        <Ionicons name="swap-horizontal" size={40} color={colors.grey} />
+        <Text style={styles.emptyTitle}>{copy.board.emptyNever.title}</Text>
+        <Text style={styles.emptyBody}>{copy.board.emptyNever.body}</Text>
+        <View style={styles.emptyActions}>
+          <PrimaryButton label={copy.board.emptyNever.action} onPress={startTrade} />
+        </View>
+      </View>
+    );
+  }
 
+  // ---- Populated ----
   return (
     <View style={styles.wrap}>
-      {pills}
-      <FlatList
-        data={visible}
-        keyExtractor={(t) => t.id}
-        contentContainerStyle={[styles.list, visible.length === 0 && styles.listEmpty]}
+      <SectionList
+        sections={sections}
+        keyExtractor={(trade) => trade.id}
+        contentContainerStyle={styles.list}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         ListHeaderComponent={
-          <View>
-            {/* A refresh failed but earlier rows are still on screen. The rows
-                stay; the banner says they are stale. */}
-            {error !== null && (
-              <View style={styles.staleBanner}>
-                <Ionicons name="alert-circle-outline" size={15} color={colors.grey} />
-                <Text style={styles.staleText}>{copy.board.refreshFailed}</Text>
-              </View>
-            )}
-
-            {pendingIncoming > 0 && (
-              <View style={styles.countBadge}>
-                <Text style={styles.countText}>
-                  {fill(copy.board.pendingCount, { count: pendingIncoming })}
-                </Text>
-              </View>
-            )}
-
-            {!neverTraded && (
-              <Pressable style={styles.startRow} onPress={startTrade}>
-                <Ionicons name="add" size={18} color={colors.black} />
-                <Text style={styles.startText}>{copy.board.startTrade}</Text>
-              </Pressable>
-            )}
+          // A refresh failed but earlier rows are still on screen. The rows
+          // stay; the banner says they are stale.
+          error !== null ? (
+            <View style={styles.staleBanner}>
+              <Ionicons name="alert-circle-outline" size={15} color={colors.grey} />
+              <Text style={styles.staleText}>{copy.board.refreshFailed}</Text>
+            </View>
+          ) : null
+        }
+        renderSectionHeader={({ section }) => (
+          <View style={styles.sectionHeader}>
+            <Text style={styles.sectionTitle}>{section.title}</Text>
           </View>
-        }
-        ListEmptyComponent={
-          neverTraded ? (
-            // Never traded at all — the way in is the whole point of the state.
-            <View style={styles.centered}>
-              <Ionicons name="swap-horizontal" size={40} color={colors.grey} />
-              <Text style={styles.emptyTitle}>{copy.board.emptyNever.title}</Text>
-              <Text style={styles.emptyBody}>{copy.board.emptyNever.body}</Text>
-              <View style={styles.emptyActions}>
-                <PrimaryButton label={copy.board.emptyNever.action} onPress={startTrade} />
-              </View>
-            </View>
-          ) : (
-            // Has trades, none match the filter. Telling this person "no trades
-            // yet" would be false, so the offer is a filter change instead.
-            <View style={styles.centered}>
-              <Text style={styles.emptyTitle}>{copy.board.emptyFiltered.title}</Text>
-              <Text style={styles.emptyBody}>{copy.board.emptyFiltered.body}</Text>
-              <View style={styles.emptyActions}>
-                <PrimaryButton
-                  label={copy.board.emptyFiltered.action}
-                  variant="outline"
-                  onPress={() => setFilter("all")}
-                />
-              </View>
-            </View>
-          )
-        }
+        )}
         renderItem={({ item }) => (
           <TradeRow trade={item} onPress={() => router.push(`/trade/${item.id}`)} />
         )}
       />
+      {fab}
     </View>
   );
 }
 
+const FAB_SIZE = 56;
+
 const styles = StyleSheet.create({
   wrap: { flex: 1 },
-  pills: { flexDirection: "row", gap: 8, paddingHorizontal: 16, paddingBottom: 14 },
-  pill: {
-    flex: 1,
-    borderWidth: 1.5,
-    borderColor: colors.black,
-    borderRadius: radius.pill,
-    paddingVertical: 9,
-    alignItems: "center",
-  },
-  pillActive: { backgroundColor: colors.black },
-  pillText: { fontFamily: fonts.bold, fontSize: 12, color: colors.black },
-  pillTextActive: { color: colors.white },
 
-  list: { paddingHorizontal: 16, paddingBottom: 24 },
-  listEmpty: { flexGrow: 1 },
+  list: {
+    paddingHorizontal: 16,
+    // Clears the floating button, so the last row can always be read and
+    // pressed rather than sitting under it.
+    paddingBottom: FAB_SIZE + 40,
+  },
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
+
+  // Opaque, because the header sticks: a translucent one would drag the rows
+  // scrolling underneath it along behind the words.
+  sectionHeader: { backgroundColor: colors.white, paddingTop: 4, paddingBottom: 10 },
+  sectionTitle: { fontFamily: fonts.bold, fontSize: 13, color: colors.grey },
 
   emptyTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.black, marginTop: 14 },
   emptyBody: {
@@ -277,27 +258,22 @@ const styles = StyleSheet.create({
   },
   staleText: { fontFamily: fonts.regular, fontSize: 13, color: colors.grey, flex: 1 },
 
-  countBadge: {
-    alignSelf: "flex-start",
+  fab: {
+    position: "absolute",
+    right: 16,
+    bottom: 20,
+    width: FAB_SIZE,
+    height: FAB_SIZE,
+    borderRadius: FAB_SIZE / 2,
     backgroundColor: colors.black,
-    borderRadius: radius.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    marginBottom: 12,
-  },
-  countText: { fontFamily: fonts.bold, fontSize: 12, color: colors.white },
-
-  startRow: {
-    flexDirection: "row",
     alignItems: "center",
-    gap: 6,
-    alignSelf: "flex-start",
-    borderWidth: 1.5,
-    borderColor: colors.black,
-    borderRadius: radius.pill,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    marginBottom: 14,
+    justifyContent: "center",
+    // Lifts it off the rows it floats over, on both platforms.
+    shadowColor: colors.black,
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 6,
   },
-  startText: { fontFamily: fonts.bold, fontSize: 13, color: colors.black },
+  fabPressed: { opacity: 0.85 },
 });

@@ -1,4 +1,4 @@
-import { copy } from "./copy";
+import { copy, fill } from "./copy";
 import type { Card, Trade, TradeStatus, UserSummary } from "./types";
 
 /**
@@ -95,6 +95,32 @@ export function isUnfulfillable(trade: Trade): boolean {
   return trade.fulfillable === false;
 }
 
+/** The three groups the board sorts trades into, in the order they are drawn. */
+export const BOARD_SECTIONS = ["needsYou", "waiting", "history"] as const;
+
+export type BoardSection = (typeof BOARD_SECTIONS)[number];
+
+/**
+ * Which section of the board a trade belongs under.
+ *
+ * The board groups by *what the viewer can do about a trade* rather than by
+ * direction, which is what let the all/incoming/outgoing filter go: "incoming"
+ * mixed the one trade awaiting an answer in with every incoming trade already
+ * settled, so the question people open this screen with — what needs me? — was
+ * the one thing the filter could not ask.
+ *
+ * `needsYou` is exactly `isActionable`, so the section a row sits under and
+ * whether it can be pressed cannot disagree. Note what that puts in `waiting`:
+ * an incoming PENDING trade whose cards have since moved is unanswerable here
+ * (the row is inert, `fulfillable` is `false`), so it is not something the
+ * viewer can act on and does not belong above the fold with the ones that are.
+ * It is still unanswered, so it is not history either.
+ */
+export function sectionOf(trade: Trade): BoardSection {
+  if (isActionable(trade)) return "needsYou";
+  return trade.status === "PENDING" ? "waiting" : "history";
+}
+
 /**
  * `TradeStatus` is SCREAMING_CASE on the wire; `copy.board.status` is keyed
  * lowercase.
@@ -140,13 +166,44 @@ export function statusLine(trade: Trade): string {
  */
 const DATE_FMT = new Intl.DateTimeFormat();
 
+/** Days apart by the calendar, not by elapsed hours. */
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** The first day that reads as a date rather than as a count of days back. */
+const RELATIVE_LIMIT_DAYS = 7;
+
 /**
- * The date to show for a trade, formatted for the device.
+ * Whole days between two instants, counted in local calendar days.
+ *
+ * Deliberately not `elapsed / DAY_MS`. A trade created at 11pm is "yesterday"
+ * at 1am the next morning — two hours old, one calendar day back — and an
+ * elapsed-time division would call it "today" for another twenty-two hours.
+ * The word people check a timestamp against is the calendar's, so both instants
+ * are floored to local midnight before subtracting.
+ *
+ * Returns a negative number for a timestamp in the future, which a clock skewed
+ * by a few minutes can produce. Every caller below tests for specific
+ * non-negative values, so those fall through to the absolute date rather than
+ * rendering "-0d ago".
+ */
+function calendarDaysAgo(then: Date, now: Date): number {
+  const midnight = (d: Date) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  return Math.round((midnight(now) - midnight(then)) / DAY_MS);
+}
+
+/**
+ * The date to show for a trade.
  *
  * `createdAt`, not `respondedAt`. The board is ordered by creation, so a
  * month-old trade answered today sits a month down the list — showing the
  * creation date is what makes that ordering read as deliberate rather than
  * broken, and the review screen shows the same date for the same reason.
+ *
+ * Recent trades read relatively — `today`, `yesterday`, `3d ago` — because that
+ * is the fact somebody scanning a board actually wants, and because a numeric
+ * date beside every row is noise when most of the board is from this week.
+ * Past a week the relative form stops helping ("47d ago" is not a date anybody
+ * pictures), so it falls back to the device's own numeric format.
  *
  * An unparseable timestamp returns `""` rather than "Invalid Date". Both call
  * sites test for the empty string and draw nothing, so a date the client cannot
@@ -154,5 +211,13 @@ const DATE_FMT = new Intl.DateTimeFormat();
  */
 export function tradeDateLabel(trade: Trade): string {
   const created = new Date(trade.createdAt);
-  return Number.isNaN(created.getTime()) ? "" : DATE_FMT.format(created);
+  if (Number.isNaN(created.getTime())) return "";
+
+  const days = calendarDaysAgo(created, new Date());
+  if (days === 0) return copy.board.date.today;
+  if (days === 1) return copy.board.date.yesterday;
+  if (days > 1 && days < RELATIVE_LIMIT_DAYS) {
+    return fill(copy.board.date.daysAgo, { count: days });
+  }
+  return DATE_FMT.format(created);
 }

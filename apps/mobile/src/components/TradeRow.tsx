@@ -29,10 +29,26 @@ export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => voi
   const body = (
     <>
       <View style={styles.head}>
-        <Text style={styles.partner} numberOfLines={1}>
-          @{partner.username}
-        </Text>
-        {dateLabel !== "" && <Text style={styles.date}>{dateLabel}</Text>}
+        <View style={styles.identity}>
+          <Text style={styles.partner} numberOfLines={1}>
+            @{partner.username}
+          </Text>
+          {dateLabel !== "" && <Text style={styles.date}>{dateLabel}</Text>}
+        </View>
+
+        {/* Where a trade stands, at the top of the card rather than under it.
+            Status is the most scannable thing about a row — it is what someone
+            runs their eye down a board for — and it was the last thing on the
+            card, below two pieces of art. Only an actionable row gets the
+            filled chip: solid black is the screen's strongest emphasis and
+            spending it anywhere else is what made three different controls
+            read as equally urgent. */}
+        <View style={[styles.chip, actionable && styles.chipActionable]}>
+          <Text style={[styles.chipText, actionable && styles.chipTextActionable]}>
+            {statusLine(trade)}
+          </Text>
+        </View>
+
         {actionable && (
           <Ionicons name="chevron-forward" size={18} color={colors.black} style={styles.chevron} />
         )}
@@ -45,8 +61,6 @@ export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => voi
           requestedCard={trade.requestedCard}
         />
       </View>
-
-      <Text style={styles.status}>{statusLine(trade)}</Text>
 
       {unfulfillable && (
         <View style={styles.note}>
@@ -85,12 +99,25 @@ const styles = StyleSheet.create({
   // The only rows that lead anywhere carry the full-strength border.
   actionable: { borderColor: colors.black },
   pressed: { opacity: 0.85 },
-  head: { flexDirection: "row", alignItems: "center", marginBottom: 12 },
-  partner: { fontFamily: fonts.bold, fontSize: 15, color: colors.black, flex: 1 },
-  date: { fontFamily: fonts.regular, fontSize: 12, color: colors.grey },
-  chevron: { marginLeft: 6 },
+  head: { flexDirection: "row", alignItems: "center", marginBottom: 12, gap: 8 },
+  // Username over date, so the chip beside them gets the full height of the
+  // row to sit against and a long username has somewhere to go but the ellipsis.
+  identity: { flex: 1 },
+  partner: { fontFamily: fonts.bold, fontSize: 15, color: colors.black },
+  date: { fontFamily: fonts.regular, fontSize: 12, color: colors.grey, marginTop: 2 },
+  chevron: { marginLeft: -2 },
   dimmed: { opacity: 0.45 },
-  status: { fontFamily: fonts.bold, fontSize: 13, color: colors.black, marginTop: 12 },
-  note: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 6 },
+
+  chip: {
+    backgroundColor: colors.lightGrey,
+    borderRadius: radius.pill,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  chipActionable: { backgroundColor: colors.black },
+  chipText: { fontFamily: fonts.bold, fontSize: 11, color: colors.black },
+  chipTextActionable: { color: colors.white },
+
+  note: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 12 },
   noteText: { fontFamily: fonts.regular, fontSize: 12, color: colors.grey, flex: 1 },
 });

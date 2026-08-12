@@ -36,11 +36,12 @@ const mockApi = jest.mocked(api);
 /**
  * TH-10's board, and the pill it lives behind.
  *
- * The two empty states are the point. They are different facts with different
- * exits — never traded at all, which offers the way into a new trade, versus
- * has trades but none matching the filter, which offers to clear the filter —
- * and collapsing them would tell somebody with a full board that they have no
- * trades yet.
+ * The grouping is the point. The board sorts trades by what the viewer can do
+ * about them — `needs you`, `waiting`, `history` — which is what replaced the
+ * all/incoming/outgoing filter, and the rule that keeps it honest is that
+ * `needs you` holds exactly the rows that can be pressed. A row that is listed
+ * as needing an answer and then does nothing when tapped is worse than either
+ * the filter or the badge this layout removed.
  */
 
 const SERVER_SENTENCE = "server said no";
@@ -66,7 +67,11 @@ async function board(trades: Trade[]) {
   await waitFor(() => expect(mockApi.trades).toHaveBeenCalled());
 }
 
-describe("empty never versus empty filtered", () => {
+/** The header a section draws for `count` rows under it. */
+const header = (section: keyof typeof copy.board.sections, count: number) =>
+  fill(copy.board.sections[section], { count });
+
+describe("the empty board", () => {
   it("offers the way into a new trade to somebody who has never traded", async () => {
     await board([]);
 
@@ -77,74 +82,68 @@ describe("empty never versus empty filtered", () => {
     expect(router.push).toHaveBeenCalledWith("/trade/new");
   });
 
-  it("blames the filter, not the board, when trades exist but none match", async () => {
-    await board([trade({ direction: "sent" })]);
-    await screen.findByText(copy.board.status.sent.pending);
-
-    fireEvent.press(screen.getByText(copy.board.filters.incoming));
-
-    // Telling this person "no trades yet" would be false — they have one.
-    expect(await screen.findByText(copy.board.emptyFiltered.title)).toBeOnTheScreen();
-    expect(screen.queryByText(copy.board.emptyNever.title)).toBeNull();
-  });
-
-  it("clears the filter rather than starting a trade from the filtered empty", async () => {
-    await board([trade({ direction: "sent" })]);
-    await screen.findByText(copy.board.status.sent.pending);
-    fireEvent.press(screen.getByText(copy.board.filters.incoming));
-    await screen.findByText(copy.board.emptyFiltered.title);
-
-    fireEvent.press(screen.getByText(copy.board.emptyFiltered.action));
-
-    // The row comes back, and nothing navigated.
-    expect(await screen.findByText(copy.board.status.sent.pending)).toBeOnTheScreen();
-    expect(router.push).not.toHaveBeenCalled();
-  });
-
-  it("never shows the filtered empty to somebody with no trades at all", async () => {
+  it("draws no section headers when there is nothing to put under them", async () => {
     await board([]);
     await screen.findByText(copy.board.emptyNever.title);
 
-    fireEvent.press(screen.getByText(copy.board.filters.outgoing));
-
-    expect(await screen.findByText(copy.board.emptyNever.title)).toBeOnTheScreen();
-    expect(screen.queryByText(copy.board.emptyFiltered.title)).toBeNull();
+    // The full-width button is this state's whole point, so the floating one
+    // would be a second control for one journey.
+    expect(screen.queryByLabelText(copy.board.startTrade)).toBeNull();
+    expect(screen.queryByText(header("needsYou", 0))).toBeNull();
   });
 });
 
-describe("filtering", () => {
-  it("keeps only what the pill names", async () => {
-    await board([trade({ id: "in", direction: "received" }), trade({ id: "out", direction: "sent" })]);
-    await screen.findByText(copy.board.status.received.pending);
-
-    fireEvent.press(screen.getByText(copy.board.filters.outgoing));
-
-    // `incoming`/`outgoing` are the viewer's words for the API's
-    // `received`/`sent`, and the mapping is the one thing this can get wrong.
-    expect(await screen.findByText(copy.board.status.sent.pending)).toBeOnTheScreen();
-    expect(screen.queryByText(copy.board.status.received.pending)).toBeNull();
-  });
-
-  it("counts pending incoming trades and nothing else", async () => {
+describe("grouping by what the viewer can do", () => {
+  it("counts each section and leaves the empty ones undrawn", async () => {
     await board([
+      // Answerable: incoming, pending, still fulfillable.
       trade({ id: "a", direction: "received", status: "PENDING" }),
       trade({ id: "b", direction: "received", status: "PENDING" }),
-      // Answered, so it is not waiting on anybody.
-      trade({ id: "c", direction: "received", status: "ACCEPTED", fulfillable: null }),
-      // Outgoing, so it is waiting on the other person.
-      trade({ id: "d", direction: "sent", status: "PENDING" }),
+      // Unanswered, but nothing the viewer can do — one is theirs to wait on,
+      // the other can no longer complete.
+      trade({ id: "c", direction: "sent", status: "PENDING" }),
+      trade({ id: "d", direction: "received", status: "PENDING", fulfillable: false }),
+      // Answered.
+      trade({ id: "e", direction: "sent", status: "ACCEPTED", fulfillable: null }),
     ]);
 
-    expect(
-      await screen.findByText(fill(copy.board.pendingCount, { count: 2 }))
-    ).toBeOnTheScreen();
+    expect(await screen.findByText(header("needsYou", 2))).toBeOnTheScreen();
+    expect(screen.getByText(header("waiting", 2))).toBeOnTheScreen();
+    expect(screen.getByText(header("history", 1))).toBeOnTheScreen();
   });
 
-  it("hides the count when nothing is waiting", async () => {
-    await board([trade({ direction: "sent", status: "PENDING" })]);
-    await screen.findByText(copy.board.status.sent.pending);
+  it("never puts an unanswerable trade under the header that promises an answer", async () => {
+    // The replaced `incoming` filter could not tell these two apart: both are
+    // trades sent to the viewer, and only one of them can be acted on.
+    await board([
+      trade({ id: "stuck", direction: "received", status: "PENDING", fulfillable: false }),
+      trade({ id: "done", direction: "received", status: "DECLINED", fulfillable: null }),
+    ]);
 
-    expect(screen.queryByText(fill(copy.board.pendingCount, { count: 0 }))).toBeNull();
+    expect(await screen.findByText(header("waiting", 1))).toBeOnTheScreen();
+    expect(screen.getByText(header("history", 1))).toBeOnTheScreen();
+    expect(screen.queryByText(header("needsYou", 1))).toBeNull();
+  });
+
+  it("shows no needs-you header when nothing is waiting on the viewer", async () => {
+    await board([trade({ direction: "sent", status: "PENDING" })]);
+
+    expect(await screen.findByText(header("waiting", 1))).toBeOnTheScreen();
+    expect(screen.queryByText(header("needsYou", 1))).toBeNull();
+  });
+});
+
+describe("the way into a new trade", () => {
+  it("floats over a populated board and opens the wizard", async () => {
+    await board([trade({ direction: "sent" })]);
+    await screen.findByText(header("waiting", 1));
+
+    // Reached by its accessibility label: the control is an icon, so that label
+    // is the only name it has, and a test that found it any other way would
+    // pass with it unreachable to a screen reader.
+    fireEvent.press(screen.getByLabelText(copy.board.startTrade));
+
+    expect(router.push).toHaveBeenCalledWith("/trade/new");
   });
 });
 
@@ -201,9 +200,13 @@ describe("failures", () => {
 describe("opening a row", () => {
   it("routes to the trade behind an actionable row", async () => {
     await board([trade({ id: "trade-9", direction: "received", status: "PENDING" })]);
-    await screen.findByText(copy.board.status.received.pending);
+    const status = await screen.findByText(copy.board.status.received.pending);
 
-    fireEvent.press(screen.getByRole("button"));
+    // Pressed through the row's own status chip rather than by role: the
+    // floating way into a new trade is a button on this screen too, and a
+    // lookup that assumed there was only one would break the day it appeared —
+    // which is exactly what it did.
+    fireEvent.press(status);
 
     expect(router.push).toHaveBeenCalledWith("/trade/trade-9");
   });
