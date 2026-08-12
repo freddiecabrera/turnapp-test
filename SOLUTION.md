@@ -9,7 +9,7 @@ decided along the way.
 ## What was built
 
 Card trading down to the database: a `Trade` model with its migration, six endpoints behind
-`requireAuth`, the shared DTOs, and 161 tests.
+`requireAuth`, the shared DTOs, and 165 API tests.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -24,9 +24,10 @@ Cards move only when the recipient accepts, and only inside one transaction. `Tr
 permanent log rather than a queue of open offers, so a declined trade still reads as declined
 on both boards.
 
-**The mobile screens are not built.** The DTOs are mirrored into `apps/mobile/src/types.ts`
-so the board and the create-trade wizard have their contract, but no UI consumes them yet.
-That is the missing layer of the vertical slice and the first thing I'd build next.
+**The mobile screens sit on top of it**: the trading board behind the existing `trading board`
+pill, a four-step create-trade wizard, and the approve/decline screen — with 128 mobile tests
+beside them. Every user-facing string lives in one file, `apps/mobile/src/copy.ts`, so the
+wording is editable without touching a component.
 
 ---
 
@@ -37,14 +38,14 @@ From the repo root, on a fresh clone:
 ```bash
 cp .env.example .env                # required first — the Prisma scripts read it
 npm install                         # workspaces: packages/*, apps/api, apps/admin
-npm --prefix apps/mobile install    # mobile is NOT a workspace, so it installs separately
+npm --prefix apps/mobile install --legacy-peer-deps   # mobile is NOT a workspace
 npm run api:setup                   # docker postgres + prisma generate + migrate + seed
 ```
 
 One command is the whole gate:
 
 ```bash
-npm run verify   # api typecheck + mobile typecheck + admin build + 161 tests
+npm run verify   # api typecheck + mobile typecheck + admin build + 293 tests
 ```
 
 The tests are integration tests against real Postgres, over HTTP with supertest, on a
@@ -150,8 +151,6 @@ actually available.]_
 
 ## What I'd do with more time
 
-- **The mobile screens** — the board and the create-trade wizard. The contract is already
-  mirrored into `apps/mobile/src/types.ts`.
 - **Per-copy `UserCard` rows.** The model this schema wants: a swap becomes
   `UPDATE UserCard SET userId = ?`, with no decrement arithmetic and no delete-at-zero. It's
   11 files across four surfaces plus a data migration, which is why it isn't here.
@@ -169,4 +168,4 @@ actually available.]_
 
 ## Hours
 
-_[TODO: hours]_
+About 12 hours.
