@@ -262,6 +262,27 @@ what they offered, does the recipient still own what was requested. One extra qu
 
 `status` then means only "what a human did," which is what a status column should mean.
 
+### Unfulfillable gates accepting, not opening
+
+An unfulfillable trade is still `PENDING`, and that pair of facts has exactly one exit. Accept is
+impossible: `moveCard`'s guarded decrement matches no row and the transaction is rolled back with
+a 409. **There is no cancel or withdraw endpoint** — the trades router is create, read, accept,
+decline — so the sender cannot retract the offer either, and the 403 on decline keeps the sender
+from answering in the recipient's name. What is left is decline, which is precisely why decline
+deliberately does *not* re-check ownership: a dead offer must stay refusable, or it sits on both
+boards forever.
+
+So `fulfillable === false` may disable the accept action and must never disable the route to the
+screen. A received trade that is still `PENDING` stays openable whatever `fulfillable` says,
+because declining is the only way it ever leaves either board and the review screen is where
+declining lives. "Not actionable" is the tempting reading of an unfulfillable row, and it is the
+wrong one — the row is not *acceptable*, which is a narrower claim.
+
+None of this argues for writing `DECLINED` when a trade goes stale, for the two reasons already
+above: no human declined it, and a cascade cannot tell a dead sibling from a live one when the
+owner held two copies. Escrow is the systematic fix — it is out of scope for the reason given
+above, not because the dead end is acceptable.
+
 ---
 
 ## Edge cases and where they're caught
@@ -285,7 +306,8 @@ what they offered, does the recipient still own what was requested. One extra qu
 | Declining a trade | decline, guarded claim | 200, `UserCard` untouched |
 | Declining an already-answered trade | decline, claim guard | 409 |
 | Re-sending an offer that was declined | create, partial unique index | 201 — the index is `WHERE status = 'PENDING'` |
-| Pending trade whose card has since moved | `GET /trades` | still PENDING, `fulfillable: false` |
+| Pending trade whose card has since moved | `GET /trades` | still PENDING, `fulfillable: false` — never acceptable, still declinable |
+| Declining an unfulfillable trade | decline, ownership deliberately not re-checked | 200 — the only exit such a trade has |
 
 The "sender traded it away" row is the one that separates a working submission from a correct
 one, and it's why ownership is validated at accept rather than only at create.
