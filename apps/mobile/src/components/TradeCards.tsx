@@ -1,4 +1,4 @@
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { rarityColor } from "./CardTile";
 import { copy } from "../copy";
@@ -49,16 +49,36 @@ export function TradeCards({
   const { give, get } = giveAndGet(direction, offeredCard, requestedCard);
   const detail = size === "detail";
 
+  // As wide as the surface allows, up to the ceiling for this size. A 390pt
+  // phone reaches the ceiling with a little to spare; a 360pt one lands just
+  // under it and draws a slightly smaller card rather than one running off the
+  // edge, which a hardcoded 140 would do.
+  const { width: windowWidth } = useWindowDimensions();
+  const available = (windowWidth - SURFACE_CHROME[size]) / 2;
+  const cardWidth = Math.max(MIN_CARD_WIDTH, Math.min(MAX_CARD_WIDTH[size], available));
+
   return (
     <View style={styles.wrap}>
-      <TradeCard card={give} label={copy.trade.give} detail={detail} testID={GIVE_TEST_ID} />
+      <TradeCard
+        card={give}
+        label={copy.trade.give}
+        detail={detail}
+        width={cardWidth}
+        testID={GIVE_TEST_ID}
+      />
       <Ionicons
         name="swap-horizontal"
         size={detail ? 26 : 18}
         color={colors.grey}
         style={styles.arrow}
       />
-      <TradeCard card={get} label={copy.trade.get} detail={detail} testID={GET_TEST_ID} />
+      <TradeCard
+        card={get}
+        label={copy.trade.get}
+        detail={detail}
+        width={cardWidth}
+        testID={GET_TEST_ID}
+      />
     </View>
   );
 }
@@ -84,11 +104,14 @@ function TradeCard({
   card,
   label,
   detail,
+  width,
   testID,
 }: {
   card: Card;
   label: string;
   detail: boolean;
+  /** Measured by the parent, so both columns are identical by construction. */
+  width: number;
   testID: string;
 }) {
   return (
@@ -96,7 +119,7 @@ function TradeCard({
       <Text style={[styles.label, detail && styles.labelDetail]} numberOfLines={1}>
         {label}
       </Text>
-      <View style={[styles.art, detail && styles.artDetail]}>
+      <View style={[styles.art, detail && styles.artDetail, { width }]}>
         {card.imageUrl ? (
           // `contain`, not `cover`. The box is already the shape of a card, so
           // the two agree for every image the seed ships — but admins upload
@@ -134,26 +157,42 @@ function TradeCard({
 const CARD_ASPECT = 575 / 1198;
 
 /**
- * How wide a card is drawn on each surface. `aspectRatio` derives the height.
+ * The widest a card is drawn on each surface. `aspectRatio` derives the height,
+ * so 140 draws a 292pt card and 150 draws a 313pt one.
  *
- * A fixed width rather than `width: "100%"` with a `maxWidth` cap. That pairing
- * looks more responsive and is wrong: `aspectRatio` resolves against the
- * percentage width — the full column — and `maxWidth` then clamps only the
- * width, leaving a box the height of a card twice as wide. The card sits
- * correctly inside it and the extra a hundred points draw as grey bars above
- * and below, which is the same "the card looks broken" this whole change set
- * out to fix.
- *
- * Both numbers are chosen so each surface keeps the height it already had. A
- * card at its true shape is much narrower than the 0.7 box it replaces, and
- * these widths land within a couple of points of the old heights, so nothing
- * below moves: the board's rows are the size they were, and the review screen's
- * accept and decline buttons stay where they were on screen. They are also
- * comfortably narrower than the tightest column any supported phone gives a
- * card, so neither needs to shrink to fit.
+ * A card at its true shape is narrow, and the pair sat in a row with something
+ * like ninety points of unused gutter on either side of it — the cards read as
+ * slim not because the artwork is, but because the layout was capped to keep
+ * rows short. These take that space back. The board pays for it in row height
+ * (roughly 1.5 trades per screen instead of 2.5, which is the deliberate trade)
+ * and the review screen pays nothing at all: it is a scroll view whose actions
+ * were already sitting above a screenful of white space.
  */
-const ROW_CARD_WIDTH = 100;
-const DETAIL_CARD_WIDTH = 108;
+const MAX_CARD_WIDTH = { row: 140, detail: 150 } as const;
+
+/**
+ * The horizontal space *outside* the two cards, per surface: the padding of
+ * everything wrapping the pair, plus the gutter the swap glyph sits in.
+ *
+ * `row` — the board list's 16 either side, `TradeRow`'s card padding of 14
+ * either side, and this component's 18pt glyph in its 10pt margins.
+ * `detail` — the review screen's `content` padding of 20 either side, and the
+ * larger 26pt glyph in the same margins. That second figure is the one
+ * `app/trade/[id].tsx` already hardcodes as `CARD_GUTTER` so its ownership
+ * notes line up under the columns.
+ *
+ * Knowing this much about its callers is not lovely, and the alternative is
+ * worse: `width: "100%"` with a `maxWidth` cap reads as the responsive version
+ * and silently isn't. `aspectRatio` resolves against the percentage width — the
+ * full column — and `maxWidth` then clamps only the width, leaving a box tall
+ * enough for a card twice as wide, with the surplus drawn as grey bars above
+ * and below the card. Measuring the space and picking a number is the version
+ * that actually works.
+ */
+const SURFACE_CHROME = { row: 98, detail: 86 } as const;
+
+/** Below this a card is too small to read, and letterboxing is the better bug. */
+const MIN_CARD_WIDTH = 72;
 
 const styles = StyleSheet.create({
   wrap: { flexDirection: "row", alignItems: "center" },
@@ -172,14 +211,14 @@ const styles = StyleSheet.create({
     textAlign: "center",
   },
   labelDetail: { fontSize: 13, marginBottom: 8 },
+  // `width` is applied inline, measured against the window.
   art: {
-    width: ROW_CARD_WIDTH,
     aspectRatio: CARD_ASPECT,
     borderRadius: radius.sm,
     overflow: "hidden",
     backgroundColor: colors.lightGrey,
   },
-  artDetail: { width: DETAIL_CARD_WIDTH, borderRadius: radius.md },
+  artDetail: { borderRadius: radius.md },
   image: { width: "100%", height: "100%" },
   noArt: { flex: 1, alignItems: "center", justifyContent: "center" },
   accent: {
