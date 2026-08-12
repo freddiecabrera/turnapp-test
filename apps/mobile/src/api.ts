@@ -97,9 +97,15 @@ export const api = {
   me: () => request<User>("/auth/me"),
   seasons: () => request<Season[]>("/seasons"),
   cards: (seasonId?: string) =>
-    request<CardWithOwnership[]>(`/cards${seasonId ? `?seasonId=${seasonId}` : ""}`).then((cards) =>
-      cards.map(withImageUrl)
-    ),
+    request<CardWithOwnership[]>(
+      // Encoded rather than interpolated raw, for the same reason `searchUsers`
+      // below encodes its query: a value that reaches a query string unescaped
+      // can change the shape of that query string instead of being sent as a
+      // value. Today's only caller passes a cuid, which survives either way —
+      // which is exactly what makes this the kind of bug that is found by its
+      // second caller rather than its first.
+      `/cards${seasonId ? `?seasonId=${encodeURIComponent(seasonId)}` : ""}`
+    ).then((cards) => cards.map(withImageUrl)),
   card: (id: string) => request<CardWithOwnership>(`/cards/${id}`).then(withImageUrl),
   wallet: () => request<WalletResponse>("/wallet"),
   scan: (code: string) =>
