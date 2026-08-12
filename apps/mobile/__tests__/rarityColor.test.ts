@@ -1,9 +1,8 @@
 import { rarityColor } from "../src/components/CardTile";
-import { colors } from "../src/theme";
 
 // The expected values are written out as literals rather than read back out of
-// RARITY_COLORS, so that an accidental palette edit fails the test instead of
-// silently redefining what "correct" means.
+// RARITY_COLORS or the theme, so that an accidental palette edit fails the test
+// instead of silently redefining what "correct" means.
 describe("rarityColor", () => {
   it.each([
     ["daycard", "#9aa0a6"],
@@ -16,14 +15,14 @@ describe("rarityColor", () => {
   });
 
   it("falls back to light grey for an unknown rarity", () => {
-    expect(rarityColor("sparkle")).toBe(colors.lightGrey);
+    expect(rarityColor("sparkle")).toBe("#e6e6e6");
   });
 
   it("falls back to light grey for a null rarity", () => {
-    expect(rarityColor(null)).toBe(colors.lightGrey);
+    expect(rarityColor(null)).toBe("#e6e6e6");
   });
 
   it("falls back to light grey for an empty rarity", () => {
-    expect(rarityColor("")).toBe(colors.lightGrey);
+    expect(rarityColor("")).toBe("#e6e6e6");
   });
 });
