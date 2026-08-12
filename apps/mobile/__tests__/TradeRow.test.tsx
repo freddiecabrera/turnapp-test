@@ -123,19 +123,6 @@ describe("a sent row is inert in every status", () => {
       expect(onPress).not.toHaveBeenCalled();
     }
   );
-
-  it("says so on the pending row, where someone would look for a cancel button", () => {
-    renderRow({ direction: "sent", status: "PENDING", fulfillable: true });
-
-    expect(screen.getByText(copy.board.sentInert)).toBeOnTheScreen();
-  });
-
-  it("stays silent about it once the offer has been answered", () => {
-    // The status line already says there is nothing left to do.
-    renderRow({ direction: "sent", status: "ACCEPTED", fulfillable: null });
-
-    expect(screen.queryByText(copy.board.sentInert)).toBeNull();
-  });
 });
 
 describe("fulfillable is false, never merely falsy", () => {

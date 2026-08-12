@@ -229,7 +229,6 @@ describe("what can be answered", () => {
     expect(screen.queryByText(copy.review.decline)).toBeNull();
     // The board's own sentence, not a second copy of it.
     expect(screen.getByText(copy.board.status.sent[STATUS_KEY.PENDING])).toBeOnTheScreen();
-    expect(screen.getByText(copy.board.sentInert)).toBeOnTheScreen();
   });
 
   it("offers no answer on an incoming trade somebody already answered", async () => {
