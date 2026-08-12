@@ -123,6 +123,24 @@ export function statusLine(trade: Trade): string {
 }
 
 /**
+ * One formatter, built once, for every date this feature renders.
+ *
+ * `Date.prototype.toLocaleDateString` constructs a fresh `Intl.DateTimeFormat`
+ * on each call — the expensive half of the operation, and it was happening once
+ * per row per render of an unbounded, unpaginated list.
+ *
+ * Constructed with no arguments, which resolves to exactly what
+ * `toLocaleDateString()` resolves to: the device locale at numeric
+ * year/month/day. The output is unchanged.
+ *
+ * The one thing given up is picking up a device locale change mid-session,
+ * since this is resolved at module load rather than per call. Changing the
+ * system locale requires an app restart on React Native anyway, which reloads
+ * this module with it.
+ */
+const DATE_FMT = new Intl.DateTimeFormat();
+
+/**
  * The date to show for a trade, formatted for the device.
  *
  * `createdAt`, not `respondedAt`. The board is ordered by creation, so a
@@ -136,5 +154,5 @@ export function statusLine(trade: Trade): string {
  */
 export function tradeDateLabel(trade: Trade): string {
   const created = new Date(trade.createdAt);
-  return Number.isNaN(created.getTime()) ? "" : created.toLocaleDateString();
+  return Number.isNaN(created.getTime()) ? "" : DATE_FMT.format(created);
 }
