@@ -66,7 +66,10 @@ const SERVER_SENTENCE = "server said no";
 let router: RouterSpy;
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  // `resetAllMocks`, not `clearAllMocks`: the latter empties `mock.calls` but
+  // leaves a `mockResolvedValueOnce` queue intact, so an unconsumed one-shot
+  // answer becomes the *next* case's first response.
+  jest.resetAllMocks();
   router = routerSpy();
   (useRouter as jest.Mock).mockReturnValue(router);
   (useLocalSearchParams as jest.Mock).mockReturnValue({ id: "trade-1" });

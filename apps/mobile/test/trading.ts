@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { act } from "@testing-library/react-native";
 import type { Card, CardWithOwnership, OwnedCard, Trade, UserSummary } from "../src/types";
 
 /**
@@ -124,18 +125,40 @@ export function routerSpy(): RouterSpy {
   };
 }
 
+let latestFocusCallback: (() => void | (() => void)) | null = null;
+
 /**
  * `useFocusEffect` as a plain `useEffect`.
  *
- * Four of the five screens load their data in one, and without this they never
- * fetch at all: the real hook comes from React Navigation and needs a navigator
- * above the component. Running the callback on mount is what a focus actually
- * does the first time, and the suites that care about a *re*-focus drive it by
- * re-rendering rather than by faking a navigation event.
+ * Four of the five trading screens load their data in one, and without this
+ * they never fetch at all: the real hook comes from React Navigation and wants
+ * a navigator above the component. Running the callback on mount is what a
+ * focus does the first time.
+ *
+ * The callback is also kept, because a *re*-focus is the only way into several
+ * states — a refresh that fails over rows already on screen, a picker reloading
+ * after the review step sent somebody back to it — and re-rendering does not
+ * produce one. Each screen wraps its `load` in a `useCallback` with a stable
+ * dependency list, so the effect fires once on mount and never again however
+ * many times the component re-renders.
  */
 export function focusEffectAsEffect(callback: () => void | (() => void)): void {
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+  latestFocusCallback = callback;
   useEffect(callback, [callback]);
+}
+
+/** Re-run the last registered focus callback, the way returning to a screen does. */
+export async function refocus(): Promise<void> {
+  const callback = latestFocusCallback;
+  if (callback === null) throw new Error("no screen has registered a focus effect");
+  await act(async () => {
+    callback();
+  });
+}
+
+/** Called from `beforeEach`, so one case's screen cannot be refocused by the next. */
+export function resetFocus(): void {
+  latestFocusCallback = null;
 }
 
 /** A promise plus the handles to settle it, for asserting on an in-flight request. */
