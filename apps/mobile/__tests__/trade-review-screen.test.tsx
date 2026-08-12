@@ -44,7 +44,7 @@ jest.mock("../src/api", () => ({
   },
 }));
 
-const mockApi = api as jest.Mocked<Pick<typeof api, "trades" | "cards" | "acceptTrade" | "declineTrade">>;
+const mockApi = jest.mocked(api);
 
 /**
  * TH-12's approve/decline screen.

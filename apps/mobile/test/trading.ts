@@ -147,18 +147,41 @@ export function focusEffectAsEffect(callback: () => void | (() => void)): void {
   useEffect(callback, [callback]);
 }
 
-/** Re-run the last registered focus callback, the way returning to a screen does. */
+/**
+ * Re-run the last registered focus callback, the way returning to a screen does.
+ *
+ * The `setImmediate` is what makes the whole load land inside `act`. These
+ * callbacks fire an async `load` and do not await it, so returning from the
+ * callback leaves the request, its `.then`/`.catch` and the `finally` that
+ * clears `loading` still queued — and each state update they make afterwards is
+ * an update outside `act`, which React reports as a warning and which leaves
+ * the assertion that follows reading a half-settled screen.
+ */
 export async function refocus(): Promise<void> {
   const callback = latestFocusCallback;
   if (callback === null) throw new Error("no screen has registered a focus effect");
   await act(async () => {
     callback();
+    await new Promise((resolve) => setImmediate(resolve));
   });
 }
 
 /** Called from `beforeEach`, so one case's screen cannot be refocused by the next. */
 export function resetFocus(): void {
   latestFocusCallback = null;
+}
+
+/**
+ * Let every queued promise settle, inside `act`.
+ *
+ * For a case that asserts on something drawn *before* a request answers and
+ * would otherwise finish with that request still in flight — whose resolution
+ * then updates a component after the test is over, outside `act`.
+ */
+export async function flush(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setImmediate(resolve));
+  });
 }
 
 /** A promise plus the handles to settle it, for asserting on an in-flight request. */

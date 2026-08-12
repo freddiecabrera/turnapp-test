@@ -4,6 +4,7 @@ import Cards from "../app/(tabs)/cards";
 import { ApiError, api } from "../src/api";
 import { TradingBoard } from "../src/components/TradingBoard";
 import { copy, fill } from "../src/copy";
+import type { Trade } from "../src/types";
 import {
   focusEffectAsEffect,
   refocus,
@@ -30,7 +31,7 @@ jest.mock("../src/api", () => ({
   api: { trades: jest.fn(), cards: jest.fn() },
 }));
 
-const mockApi = api as jest.Mocked<Pick<typeof api, "trades" | "cards">>;
+const mockApi = jest.mocked(api);
 
 /**
  * TH-10's board, and the pill it lives behind.
@@ -59,7 +60,7 @@ beforeEach(() => {
 });
 
 /** Mount the board with this board state, and wait for the first load to land. */
-async function board(trades: Parameters<typeof mockApi.trades.mockResolvedValue>[0]) {
+async function board(trades: Trade[]) {
   mockApi.trades.mockResolvedValue(trades);
   render(<TradingBoard />);
   await waitFor(() => expect(mockApi.trades).toHaveBeenCalled());
