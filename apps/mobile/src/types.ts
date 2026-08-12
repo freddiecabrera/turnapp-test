@@ -41,6 +41,12 @@ export interface PointsTransaction {
   createdAt: string;
 }
 
+/** A card a user owns, with collection metadata. Returned by GET /users/:id/cards. */
+export interface OwnedCard extends Card {
+  quantity: number;
+  firstScannedAt: string;
+}
+
 export interface WalletResponse {
   pointsBalance: number;
   tiers: number[];

@@ -3,6 +3,7 @@ import { FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { useFocusEffect, useRouter } from "expo-router";
 import { CardTile } from "../../src/components/CardTile";
+import { TradingBoard } from "../../src/components/TradingBoard";
 import { api } from "../../src/api";
 import { colors, fonts } from "../../src/theme";
 import type { CardWithOwnership } from "../../src/types";
@@ -65,6 +66,12 @@ export default function Cards() {
             </View>
           )}
         />
+      ) : tab === "trading board" ? (
+        // The board owns its own loading, refresh and error states, and does
+        // its own focus refresh — mounting it here rather than lifting its data
+        // up keeps `GET /trades` off the collection tab for anyone who never
+        // opens this pill.
+        <TradingBoard />
       ) : (
         <View style={styles.comingSoon}>
           <Text style={styles.comingSoonTitle}>{tab}</Text>

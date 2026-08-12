@@ -47,6 +47,7 @@ type Parity = [
   Mirrors<Shared.Card, Local.Card>,
   Mirrors<Shared.CardWithOwnership, Local.CardWithOwnership>,
   Mirrors<Shared.PointsTransaction, Local.PointsTransaction>,
+  Mirrors<Shared.OwnedCard, Local.OwnedCard>,
   Mirrors<Shared.WalletResponse, Local.WalletResponse>,
   Mirrors<Shared.ScanResult, Local.ScanResult>,
   Mirrors<Shared.TradeStatus, Local.TradeStatus>,
@@ -71,6 +72,7 @@ type Parity = [
  * typechecked.
  */
 const _parity: Parity = [
+  true,
   true,
   true,
   true,
