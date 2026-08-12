@@ -20,30 +20,43 @@ import { colors, fonts } from "../theme";
  * `title` is a prop rather than a slot read in here, because step 3's title
  * interpolates the partner's username and the caller is the only thing that
  * knows it. Every value passed still comes from `copy.ts`.
+ *
+ * `canGoBack` exists for exactly one state: the confirmation after a trade has
+ * been created. Going back from there would return to a card picker whose work
+ * is already done, and re-sending from it only earns the 409 for an offer that
+ * already exists. A terminal state gets one door.
  */
 export function WizardScreen({
   step,
   title,
+  canGoBack = true,
   children,
 }: {
   /** 1-based, matching `copy.wizard.progress`. */
   step: number;
   title: string;
+  canGoBack?: boolean;
   children: ReactNode;
 }) {
   const router = useRouter();
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
-      <Pressable
-        style={styles.back}
-        onPress={() => router.back()}
-        accessibilityRole="button"
-        accessibilityLabel={copy.wizard.back}
-        hitSlop={8}
-      >
-        <Ionicons name="chevron-back" size={26} color={colors.black} />
-      </Pressable>
+      {canGoBack ? (
+        <Pressable
+          style={styles.back}
+          onPress={() => router.back()}
+          accessibilityRole="button"
+          accessibilityLabel={copy.wizard.back}
+          hitSlop={8}
+        >
+          <Ionicons name="chevron-back" size={26} color={colors.black} />
+        </Pressable>
+      ) : (
+        // Keeps the progress bar and title at the same height whether or not
+        // the chevron is drawn, so a state change does not jump the layout.
+        <View style={styles.backSpacer} />
+      )}
 
       <WizardProgress step={step} />
       <Text style={styles.title} numberOfLines={2}>
@@ -113,6 +126,8 @@ export function WizardFooter({ children }: { children: ReactNode }) {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.white },
   back: { padding: 12, alignSelf: "flex-start" },
+  // 26pt glyph inside 12pt of padding, matched exactly.
+  backSpacer: { height: 50 },
   title: {
     fontFamily: fonts.bold,
     fontSize: 26,
