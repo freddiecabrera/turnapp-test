@@ -10,11 +10,16 @@ import {
   WizardNotice,
   WizardScreen,
 } from "../../../src/components/WizardScreen";
-import { ApiError, api } from "../../../src/api";
+import { api } from "../../../src/api";
 import { copy, fill } from "../../../src/copy";
 import { colors, fonts } from "../../../src/theme";
 import type { Trade } from "../../../src/types";
-import { messageFor, useTradeDraft } from "../../../src/wizard";
+import {
+  messageFor,
+  sendRecoveryFor,
+  useTradeDraft,
+  type SendRecovery,
+} from "../../../src/wizard";
 
 /**
  * TH-11, step 4 of 4 — check the offer, then send it.
@@ -31,49 +36,15 @@ import { messageFor, useTradeDraft } from "../../../src/wizard";
  * new row first.
  */
 
-/**
- * Which way out to offer for a failed send.
- *
- * `POST /trades` documents thirteen refusals. They collapse into three
- * recoveries, because a person does not need thirteen answers — they need to
- * know whether to change something, go look at something, or stop:
- *
- * - **`board`** — 409, the only one. This exact offer already exists and is
- *   pending, so the thing to do is go and look at it.
- * - **`repick`** — every 400 and 404 that survives to here. Something chosen
- *   earlier stopped being true: a card one side no longer owns, a person who no
- *   longer exists. All three "change what you picked" buttons are offered, and
- *   the server's own sentence above them says which one to press.
- * - **`retry`** — a 500, or a rejected fetch that never reached the server.
- *   Nothing to change; the same request may simply work.
- *
- * The third documented recovery — you cannot do this at all — is the two staff
- * refusals, and neither survives to here. The sender-is-staff case is caught at
- * step 1 from the token, before four steps of work; the recipient-is-staff case
- * cannot be composed, because search excludes staff from the results this
- * partner was chosen from. If one ever did arrive it lands in `repick`, whose
- * "choose someone else" is the correct move for it anyway.
- *
- * Deliberately switching on `status`, never on the message. Those sentences are
- * the server's to reword; a client that branches on their text breaks silently
- * the first time one is improved.
- */
-type Recovery = "board" | "repick" | "retry";
-
-function recoveryFor(error: unknown): Recovery {
-  if (!(error instanceof ApiError)) return "retry";
-  if (error.status === 409) return "board";
-  if (error.status === 400 || error.status === 404) return "repick";
-  return "retry";
-}
-
 export default function ReviewOffer() {
   const router = useRouter();
   const draft = useTradeDraft();
 
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<Trade | null>(null);
-  const [failure, setFailure] = useState<{ message: string; recovery: Recovery } | null>(null);
+  const [failure, setFailure] = useState<{ message: string; recovery: SendRecovery } | null>(
+    null
+  );
 
   const { partner, offered, requested } = draft;
 
@@ -90,7 +61,7 @@ export default function ReviewOffer() {
     } catch (e) {
       setFailure({
         message: messageFor(e, copy.wizard.review.error.body),
-        recovery: recoveryFor(e),
+        recovery: sendRecoveryFor(e),
       });
     } finally {
       setSending(false);

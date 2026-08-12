@@ -14,13 +14,13 @@ import {
   tradeDateLabel,
 } from "../../src/trade";
 import {
+  answerRecoveryFor,
   brokenSide,
   finishedTrade,
   ownershipOf,
-  recoveryFor,
   type Answer,
+  type AnswerRecovery,
   type Recheck,
-  type Recovery,
 } from "../../src/trade-review";
 import { api, messageFor } from "../../src/api";
 import { copy, fill } from "../../src/copy";
@@ -69,7 +69,7 @@ type Phase =
   /** Answered — by this screen, or elsewhere and discovered by the re-read. */
   | { kind: "outcome" }
   /** An answer was refused. `recovery` decides what is offered next. */
-  | { kind: "failed"; answer: Answer; message: string; recovery: Recovery };
+  | { kind: "failed"; answer: Answer; message: string; recovery: AnswerRecovery };
 
 /** A card's name, or the placeholder `TradeCards` uses for the same gap. */
 function nameOf(card: Card): string {
@@ -176,7 +176,7 @@ export default function TradeReview() {
    * On a failure the board is re-read once, because the two things this screen
    * most needs to know are only answerable from the trade's own state: whether
    * it survived (a rolled-back accept is still PENDING and still declinable),
-   * and whether it had in fact already finished. See `recoveryFor` and
+   * and whether it had in fact already finished. See `answerRecoveryFor` and
    * `finishedTrade` for why that is a re-read rather than a match on the
    * server's wording.
    */
@@ -211,7 +211,7 @@ export default function TradeReview() {
           kind: "failed",
           answer: which,
           message: messageFor(e, copy.review.failed.body),
-          recovery: recoveryFor(e, which, recheck),
+          recovery: answerRecoveryFor(e, which, recheck),
         });
       } finally {
         setBusy(null);
