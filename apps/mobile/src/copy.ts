@@ -45,42 +45,63 @@ export const copy = {
 
   /** TH-10 — the trading board behind the `trading board` pill. */
   board: {
-    // CONSTRAINT: the filter pills, reusing the collectibles pill row. Each must
-    // fit a third of the screen width at 12pt bold — keep to one or two short
-    // words, lowercase to match the existing pills. No interpolation.
-    filters: {
-      all: "all",
-      incoming: "incoming",
-      outgoing: "outgoing",
+    // CONSTRAINT: the list's section headers, which replaced the
+    // all/incoming/outgoing filter pills — the board groups by what the viewer
+    // can do about a trade rather than asking them to filter for it. Each
+    // interpolates {count}, the number of rows under that header (a section
+    // with none is not drawn, so {count} is always >= 1). Keep them lowercase
+    // to match the collectibles pills above, and short: they sit in a sticky
+    // header a row's width wide.
+    //
+    // `needsYou` is the only one the viewer can act on, and it is always first.
+    // `waiting` holds every other unanswered trade — the viewer's own outgoing
+    // offers, and incoming ones that can no longer complete — so it must not
+    // read as "waiting on them", which is only true of some of them.
+    sections: {
+      needsYou: "needs you · {count}",
+      waiting: "waiting · {count}",
+      history: "history · {count}",
     },
 
-    // CONSTRAINT: the count of incoming trades still awaiting the viewer's
-    // answer. Interpolates {count}, always >= 1 (hidden at zero). This is a
-    // PENDING count, not an unread one — the API has no seen/read field, so it
-    // stays lit until the trade is answered. Do not word it as "new" or
-    // "unread". One short line.
-    pendingCount: "{count} waiting on you",
-
-    // CONSTRAINT: per-row status line. Picked by direction AND status, because
-    // one stored row means opposite things to the two parties. One short line
-    // each, sits under the card pair. No interpolation.
+    // CONSTRAINT: the status chip in a row's header, and the status line on the
+    // approve/decline screen. Picked by direction AND status, because one
+    // stored row means opposite things to the two parties.
+    //
+    // Two or three words, and NO trailing full stop: these are labels in a
+    // chip, not sentences. The six must stay distinct from each other — the
+    // lookup is `[direction][status]` and two directions sharing a string would
+    // make a swapped lookup invisible. No interpolation.
     status: {
       sent: {
         // The viewer offered; the other person has not answered yet.
-        pending: "Waiting on them.",
+        pending: "Waiting on them",
         // The other person accepted; the cards have moved.
-        accepted: "They accepted.",
+        accepted: "They accepted",
         // The other person declined; nothing moved.
-        declined: "They declined.",
+        declined: "They declined",
       },
       received: {
         // Someone offered the viewer a trade and is waiting on them.
-        pending: "Waiting on you.",
+        pending: "Waiting on you",
         // The viewer accepted; the cards have moved.
-        accepted: "You accepted.",
+        accepted: "You accepted",
         // The viewer declined; nothing moved.
-        declined: "You declined.",
+        declined: "You declined",
       },
+    },
+
+    // CONSTRAINT: how a trade's creation date is drawn, on a board row and on
+    // the approve/decline screen. Recent trades read relatively, because "2d
+    // ago" is the fact a collector wants; anything older falls back to the
+    // device's own numeric date format, which is not in this file.
+    //
+    // `daysAgo` interpolates {count} and is used for 2–6 days only — keep the
+    // token, and keep it tiny: it shares a row with the username and the status
+    // chip. All three are lowercase to sit quietly next to the chip.
+    date: {
+      today: "today",
+      yesterday: "yesterday",
+      daysAgo: "{count}d ago",
     },
 
     // CONSTRAINT: shown on a PENDING row when the API says `fulfillable` is
@@ -97,17 +118,6 @@ export const copy = {
       title: "No trades yet.",
       body: "Trades you send or receive will show up here.",
       action: "Start a trade",
-    },
-
-    // CONSTRAINT: the viewer HAS trades, but none match the active filter. Must
-    // point at the filter as the reason — telling this person "no trades yet"
-    // would be false. Interpolates nothing; the filter name is rendered
-    // separately. `action` clears the filter, so it must not read as "make a
-    // trade". Short.
-    emptyFiltered: {
-      title: "Nothing here.",
-      body: "No trades match this filter.",
-      action: "Show all",
     },
 
     // CONSTRAINT: the board could not load and there is nothing cached to show.
@@ -129,8 +139,12 @@ export const copy = {
     // interpolation.
     refreshFailed: "Couldn't refresh. Showing the last update.",
 
-    // CONSTRAINT: the button that opens the create-trade flow, shown above the
-    // populated list. Two or three words. No interpolation.
+    // CONSTRAINT: the way into the create-trade flow from a populated board.
+    // The control is a round icon button floating over the list, so this is
+    // never drawn as text — it is the button's accessibility label, and it is
+    // the only name a screen reader has for it. Say what pressing it does. Not
+    // length-constrained, but the empty state's button uses
+    // `emptyNever.action` for the same journey, so the two should agree.
     startTrade: "Start a trade",
   },
 

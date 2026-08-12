@@ -1,4 +1,4 @@
-import { Image, StyleSheet, Text, View } from "react-native";
+import { Image, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { rarityColor } from "./CardTile";
 import { copy } from "../copy";
@@ -49,16 +49,36 @@ export function TradeCards({
   const { give, get } = giveAndGet(direction, offeredCard, requestedCard);
   const detail = size === "detail";
 
+  // As wide as the surface allows, up to the ceiling for this size. A 390pt
+  // phone reaches the ceiling with a little to spare; a 360pt one lands just
+  // under it and draws a slightly smaller card rather than one running off the
+  // edge, which a hardcoded 140 would do.
+  const { width: windowWidth } = useWindowDimensions();
+  const available = (windowWidth - SURFACE_CHROME[size]) / 2;
+  const cardWidth = Math.max(MIN_CARD_WIDTH, Math.min(MAX_CARD_WIDTH[size], available));
+
   return (
     <View style={styles.wrap}>
-      <TradeCard card={give} label={copy.trade.give} detail={detail} testID={GIVE_TEST_ID} />
+      <TradeCard
+        card={give}
+        label={copy.trade.give}
+        detail={detail}
+        width={cardWidth}
+        testID={GIVE_TEST_ID}
+      />
       <Ionicons
         name="swap-horizontal"
         size={detail ? 26 : 18}
         color={colors.grey}
         style={styles.arrow}
       />
-      <TradeCard card={get} label={copy.trade.get} detail={detail} testID={GET_TEST_ID} />
+      <TradeCard
+        card={get}
+        label={copy.trade.get}
+        detail={detail}
+        width={cardWidth}
+        testID={GET_TEST_ID}
+      />
     </View>
   );
 }
@@ -84,11 +104,14 @@ function TradeCard({
   card,
   label,
   detail,
+  width,
   testID,
 }: {
   card: Card;
   label: string;
   detail: boolean;
+  /** Measured by the parent, so both columns are identical by construction. */
+  width: number;
   testID: string;
 }) {
   return (
@@ -96,9 +119,15 @@ function TradeCard({
       <Text style={[styles.label, detail && styles.labelDetail]} numberOfLines={1}>
         {label}
       </Text>
-      <View style={[styles.art, detail && styles.artDetail]}>
+      <View style={[styles.art, detail && styles.artDetail, { width }]}>
         {card.imageUrl ? (
-          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="cover" />
+          // `contain`, not `cover`. The box is already the shape of a card, so
+          // the two agree for every image the seed ships — but admins upload
+          // card art, and `cover` answers a differently-proportioned upload by
+          // cropping it. `contain` letterboxes it against the grey instead,
+          // which shows a wrong-shaped card as wrong-shaped rather than as
+          // correct-and-missing-its-story.
+          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="contain" />
         ) : (
           // Not the locked card-back: that glyph means "you don't own this",
           // which is a different fact from "the API sent no image".
@@ -115,9 +144,62 @@ function TradeCard({
   );
 }
 
+/**
+ * The proportions of a turn card: 575 × 1198, which is what every image in
+ * `apps/api/static/cards` is exported at.
+ *
+ * The box used to be `0.7` — the proportions of a physical trading card, and a
+ * reasonable guess at these. It is not what these are. A turn card is much
+ * taller: header bar, art, name, rarity pips, universe, type badge and the
+ * card's story, stacked. Held in a 0.7 box by `cover`, the whole bottom third
+ * was cropped away, so every trade drew two cards cut off mid-sentence.
+ */
+const CARD_ASPECT = 575 / 1198;
+
+/**
+ * The widest a card is drawn on each surface. `aspectRatio` derives the height,
+ * so 140 draws a 292pt card and 150 draws a 313pt one.
+ *
+ * A card at its true shape is narrow, and the pair sat in a row with something
+ * like ninety points of unused gutter on either side of it — the cards read as
+ * slim not because the artwork is, but because the layout was capped to keep
+ * rows short. These take that space back. The board pays for it in row height
+ * (roughly 1.5 trades per screen instead of 2.5, which is the deliberate trade)
+ * and the review screen pays nothing at all: it is a scroll view whose actions
+ * were already sitting above a screenful of white space.
+ */
+const MAX_CARD_WIDTH = { row: 140, detail: 150 } as const;
+
+/**
+ * The horizontal space *outside* the two cards, per surface: the padding of
+ * everything wrapping the pair, plus the gutter the swap glyph sits in.
+ *
+ * `row` — the board list's 16 either side, `TradeRow`'s card padding of 14
+ * either side, and this component's 18pt glyph in its 10pt margins.
+ * `detail` — the review screen's `content` padding of 20 either side, and the
+ * larger 26pt glyph in the same margins. That second figure is the one
+ * `app/trade/[id].tsx` already hardcodes as `CARD_GUTTER` so its ownership
+ * notes line up under the columns.
+ *
+ * Knowing this much about its callers is not lovely, and the alternative is
+ * worse: `width: "100%"` with a `maxWidth` cap reads as the responsive version
+ * and silently isn't. `aspectRatio` resolves against the percentage width — the
+ * full column — and `maxWidth` then clamps only the width, leaving a box tall
+ * enough for a card twice as wide, with the surplus drawn as grey bars above
+ * and below the card. Measuring the space and picking a number is the version
+ * that actually works.
+ */
+const SURFACE_CHROME = { row: 98, detail: 86 } as const;
+
+/** Below this a card is too small to read, and letterboxing is the better bug. */
+const MIN_CARD_WIDTH = 72;
+
 const styles = StyleSheet.create({
   wrap: { flexDirection: "row", alignItems: "center" },
-  side: { flex: 1 },
+  // Centred, because a card no longer fills its column: left-aligning the
+  // label and name against the column edge would leave them floating away
+  // from the card they belong to.
+  side: { flex: 1, alignItems: "center" },
   arrow: { marginHorizontal: 10 },
   label: {
     fontFamily: fonts.bold,
@@ -125,10 +207,13 @@ const styles = StyleSheet.create({
     color: colors.grey,
     textTransform: "lowercase",
     marginBottom: 5,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   labelDetail: { fontSize: 13, marginBottom: 8 },
+  // `width` is applied inline, measured against the window.
   art: {
-    aspectRatio: 0.7,
+    aspectRatio: CARD_ASPECT,
     borderRadius: radius.sm,
     overflow: "hidden",
     backgroundColor: colors.lightGrey,
@@ -148,6 +233,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.black,
     marginTop: 6,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   nameDetail: { fontFamily: fonts.bold, fontSize: 16, marginTop: 10 },
 });
