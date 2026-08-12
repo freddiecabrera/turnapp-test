@@ -108,3 +108,39 @@ describe("request auth headers", () => {
     expect(sentHeaders().get("Content-Type")).toBe("application/json");
   });
 });
+
+// resolveImageUrl is covered in config.test.ts; what these pin is that each
+// card-bearing endpoint is actually wired to it. The API serialises imageUrl as
+// a host-relative path, so an unwired endpoint renders blank artwork while the
+// resolveImageUrl unit test stays green and points the debugger at the wrong
+// module. Every call site gets its own case because they are three separate
+// `.then` hops, not one shared one.
+describe("card image URLs", () => {
+  const relative = { id: "c1", name: "Ace", imageUrl: "/static/cards/ace.png" };
+  const absolute = `${API_URL}/static/cards/ace.png`;
+
+  it("resolves the image path on every card from cards()", async () => {
+    mockOk([relative]);
+
+    const [card] = await api.cards();
+
+    expect(card.imageUrl).toBe(absolute);
+  });
+
+  it("resolves the image path on a single card from card()", async () => {
+    mockOk(relative);
+
+    const card = await api.card("c1");
+
+    expect(card.imageUrl).toBe(absolute);
+  });
+
+  it("resolves the image path on the card a scan awards", async () => {
+    mockOk({ card: relative, pointsAwarded: 10, newBalance: 110, alreadyOwned: false });
+
+    const result = await api.scan("QR-1");
+
+    expect(result.card.imageUrl).toBe(absolute);
+    expect(result.pointsAwarded).toBe(10);
+  });
+});
