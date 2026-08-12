@@ -115,11 +115,7 @@ export default function ChooseOffer() {
 
     if (cards.length === 0) {
       return (
-        <WizardNotice
-          icon="albums-outline"
-          title={copy.wizard.offer.empty}
-          body={copy.wizard.offer.emptyBody}
-        >
+        <WizardNotice icon="albums-outline" title={copy.wizard.offer.empty}>
           {/* `navigate`, not `push`: the tabs are already at the bottom of this
               stack, so this returns to them and selects scan rather than
               stacking a second copy of the tab navigator on top of the wizard. */}

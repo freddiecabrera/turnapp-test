@@ -223,12 +223,13 @@ export const copy = {
     offer: {
       title: "Choose your card",
       // CONSTRAINT: a hard dead end — a new account owns nothing, so there is
-      // no card to offer and no other step can fix it. `empty` is the title,
-      // `emptyBody` says how cards are acquired, and `emptyAction` is a button
-      // that leaves the wizard for the scan flow. Nothing here may suggest
-      // going back a step. Short. No interpolation.
+      // no card to offer and no other step can fix it. `empty` is the title and
+      // `emptyAction` is a button that leaves the wizard for the scan flow.
+      // There is deliberately no body between them: the title states the
+      // problem and the button states the fix, and a line saying either again
+      // is the only thing a body here could say. Nothing here may suggest going
+      // back a step. Short. No interpolation.
       empty: "Nothing to trade yet.",
-      emptyBody: "Scan your first card to get started.",
       emptyAction: "Scan a card",
       // CONSTRAINT: your collection failed to load. Same `body` rule as
       // `partner.errorBody` — only used when the server described nothing.
