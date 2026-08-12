@@ -19,7 +19,7 @@ import {
 import { api } from "../../../src/api";
 import { copy, fill } from "../../../src/copy";
 import { colors } from "../../../src/theme";
-import type { OwnedCard } from "../../../src/types";
+import type { OwnedCard, Trade } from "../../../src/types";
 import {
   chooseRequested,
   messageFor,
@@ -43,6 +43,16 @@ import {
  * going back to step 2 afterwards and picking that same card clears the
  * request, because suppression here cannot see an edit made behind it.
  *
+ * **Cards already offered are marked and disabled, not suppressed.** `POST
+ * /trades` refuses a second pending offer of the same card to the same person
+ * for the same card of theirs, so those are the choices whose only outcome is a
+ * 409 at the end of the wizard. They are still drawn, for two reasons. A card
+ * the viewer can see in the partner's collection and cannot find in this grid
+ * is a disappearance with no explanation; and removing them can empty the grid,
+ * which would invent a third dead end — with its own screen and its own copy —
+ * for a state the two below already read badly against. Marked, the grid keeps
+ * its shape and the chip says why.
+ *
  * Two dead ends, and they are genuinely different. A partner who owns nothing
  * is reachable — search returns anyone who is not staff, whatever their
  * collection — and the way out is a different partner. A partner whose only
@@ -65,6 +75,11 @@ export default function ChooseRequest() {
   // `null` means the cross-reference did not load, which is not an error state:
   // it degrades to an unmarked grid.
   const [alsoOwned, setAlsoOwned] = useState<Set<string> | null>(null);
+  // The viewer's whole board, for the "you already offered this" marker. Kept
+  // whole and filtered at render for the reason `pickable` is: the offered card
+  // is half the duplicate rule and step 2 can change it behind this screen.
+  // `null` is the same non-error as `alsoOwned`'s — nothing marked.
+  const [board, setBoard] = useState<Trade[] | null>(null);
   // Only ever true before the first answer; a refresh swaps data in silently.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,20 +92,30 @@ export default function ChooseRequest() {
     const id = ++runId.current;
     setError(null);
     try {
-      // Their collection is the screen; the viewer's own is a garnish on it, so
-      // only the first is allowed to fail the load. `api.cards()` swallows its
-      // own rejection into `null` before `Promise.all` can see it — otherwise a
-      // flaky second request would blank a first one that arrived fine.
-      const [cards, mine] = await Promise.all([
+      // Their collection is the screen; the viewer's own collection and board
+      // are garnishes on it, so only the first is allowed to fail the load.
+      // Each of the other two swallows its own rejection into `null` before
+      // `Promise.all` can see it — otherwise a flaky second or third request
+      // would blank a first one that arrived fine.
+      //
+      // That applies to the board in particular: the duplicate marker is a
+      // convenience and not the enforcement. `POST /trades` is where a duplicate
+      // is actually refused, by a partial unique index the client cannot see, so
+      // a board that never arrives costs nothing that was not already true —
+      // nothing is marked, and the 409 catches it at the send exactly as it does
+      // today.
+      const [cards, mine, trades] = await Promise.all([
         api.userCards(partnerId),
         api
           .cards()
           .then((all) => all.filter((c) => c.owned).map((c) => c.id))
           .catch(() => null),
+        api.trades().catch(() => null),
       ]);
       if (id !== runId.current) return;
       setTheirs(cards);
       setAlsoOwned(mine === null ? null : new Set(mine));
+      setBoard(trades);
       // Their collection can move between this screen and the send. Dropping a
       // selection they no longer hold is what stops the review step's "change
       // what you're asking for" recovery from returning to the same refusal.
@@ -129,6 +154,51 @@ export default function ChooseRequest() {
   // rather than at load time, so coming back after changing the offer re-filters
   // without refetching their collection.
   const pickable = (theirs ?? []).filter((c) => c.id !== offeredId);
+
+  // The cards this exact offer has already been made for.
+  //
+  // The index behind the 409 is on all four of `(fromUserId, toUserId,
+  // offeredCardId, requestedCardId)` and is partial on `PENDING`, so this
+  // predicate is all four columns and the status, and each clause is load
+  // bearing. Dropping `offeredCard` would block a card of theirs the viewer had
+  // asked for with a *different* card of their own, which is a distinct trade
+  // the server accepts. Dropping `toUser` would block it across every partner.
+  // Dropping `direction` would block what somebody offered *the viewer*, which
+  // is not this constraint at all. And answered trades are outside the index on
+  // purpose: re-sending an identical offer after a decline is legal, so
+  // `ACCEPTED` and `DECLINED` must never mark anything.
+  //
+  // Computed from the live draft rather than at load time, for the reason
+  // `pickable` is — going back to step 2 and changing the offer changes which
+  // of these cards are duplicates, and does not refetch the board.
+  //
+  // Not handled, and stated rather than assumed: a card selected while it was
+  // legal and made a duplicate afterwards, by changing the offer behind this
+  // screen, stays selected and draws the chip. `chooseOffered` clears a
+  // colliding selection but knows nothing about the board, and clearing it here
+  // means committing to the store during a render. That path ends at the same
+  // 409 it ends at today, so this leaves it no worse and marks it besides.
+  const alreadyOffered = new Set(
+    (board ?? [])
+      .filter(
+        (t) =>
+          t.status === "PENDING" &&
+          t.direction === "sent" &&
+          t.toUser.id === partnerId &&
+          t.offeredCard.id === offeredId
+      )
+      .map((t) => t.requestedCard.id)
+  );
+
+  // One chip, so the two markers are exclusive and the blocking one wins. A
+  // card can be both already-offered and already-owned, and "Owned" is a note
+  // on a card that can still be picked, while this one is the only thing on
+  // screen explaining why the card underneath it does not respond.
+  const markerFor = (cardId: string) => {
+    if (alreadyOffered.has(cardId)) return copy.wizard.request.alreadyOffered;
+    if (alsoOwned?.has(cardId)) return copy.wizard.request.alsoOwned;
+    return null;
+  };
 
   const pickSomeoneElse = () => router.dismissTo("/trade/new");
 
@@ -212,7 +282,8 @@ export default function ChooseRequest() {
             <PartnerCardTile
               card={item}
               quantity={item.quantity}
-              marker={alsoOwned?.has(item.id) ? copy.wizard.request.alsoOwned : null}
+              marker={markerFor(item.id)}
+              disabled={alreadyOffered.has(item.id)}
               onPress={() => chooseRequested(item)}
             />
           </SelectableCell>
