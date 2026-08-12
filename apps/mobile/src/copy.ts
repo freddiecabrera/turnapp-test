@@ -94,7 +94,7 @@ export const copy = {
     // there is no cancel or withdraw endpoint and the sender cannot decline
     // their own offer. This exists so an inert row reads as deliberately inert
     // rather than as a broken button. Very short. No interpolation.
-    sentInert: "No action available.",
+    sentInert: "Nothing to do here.",
 
     // CONSTRAINT: the viewer has never been in a trade at all. Offers the way
     // in. `title` one short line, `body` at most two, `action` a button label of
@@ -223,13 +223,14 @@ export const copy = {
     offer: {
       title: "Choose your card",
       // CONSTRAINT: a hard dead end — a new account owns nothing, so there is
-      // no card to offer and no other step can fix it. `empty` is the title,
-      // `emptyBody` says how cards are acquired, and `emptyAction` is a button
-      // that leaves the wizard for the scan flow. Nothing here may suggest
-      // going back a step. Short.
-      empty: "You have no cards to offer.",
-      emptyBody: "Scan a card to start your collection, then come back.",
-      emptyAction: "Go to scan",
+      // no card to offer and no other step can fix it. `empty` is the title and
+      // `emptyAction` is a button that leaves the wizard for the scan flow.
+      // There is deliberately no body between them: the title states the
+      // problem and the button states the fix, and a line saying either again
+      // is the only thing a body here could say. Nothing here may suggest going
+      // back a step. Short. No interpolation.
+      empty: "Nothing to trade yet.",
+      emptyAction: "Scan a card",
       // CONSTRAINT: your collection failed to load. Same `body` rule as
       // `partner.errorBody` — only used when the server described nothing.
       errorTitle: "Couldn't load your cards.",
@@ -246,9 +247,11 @@ export const copy = {
       // staff regardless of collection size, so an empty person is selectable
       // and this is reachable. A dead end for this partner only — `emptyAction`
       // goes back to the search, and must NOT read as abandoning the trade,
-      // because the card you picked to give is kept. Short.
-      empty: "They have no cards to trade.",
-      emptyBody: "Pick someone else and your card stays selected.",
+      // because the card you picked to give is kept. Short. No interpolation:
+      // the step's own title names the partner one line above, so "they" has a
+      // referent already on screen.
+      empty: "They have nothing to trade yet.",
+      emptyBody: "Your card stays selected.",
       emptyAction: "Choose someone else",
       // CONSTRAINT: they own exactly one card and it is the one you are already
       // offering, so suppressing it emptied the list. Distinct from `empty`:
@@ -287,8 +290,14 @@ export const copy = {
       // `confirm` did — an offer was sent, no cards have moved. `successBody`
       // says what happens next and must not promise a timescale or an outcome.
       // `successAction` is a button back to the trading board. Short.
-      success: "Offer sent.",
-      successBody: "Nothing moves until they accept. You'll see it on your board.",
+      //
+      // `success` interpolates {username} — keep the token, it names the person
+      // the offer went to. That name is read off the created trade rather than
+      // the draft, so it is the recipient the server recorded. The name can be
+      // long, so keep the wording around it short. `successBody` and
+      // `successAction` interpolate nothing.
+      success: "Sent to {username}.",
+      successBody: "They'll see it on their board. Nothing moves until they accept.",
       successAction: "Back to your board",
 
       // CONSTRAINT: sending failed. Thirteen failures are documented on `POST
