@@ -652,6 +652,109 @@ describe("POST /trades/:id/accept", () => {
       // in either direction — including the increment it had not reached.
       expect(await totalCopiesEverywhere()).toBe(before);
     });
+
+    it("refuses the second of two trades queued on the accepter's own last copy", async () => {
+      const season = await createSeason();
+      const alicePrize = await createCard(season.id, "Alice's Prize");
+      const carolPrize = await createCard(season.id, "Carol's Prize");
+      const bobCard = await createCard(season.id, "Bob's");
+      const alice = await createUser("alice");
+      const bob = await createUser("bob");
+      const carol = await createUser("carol");
+
+      // The case above turned inside out. There, one sender's copy was
+      // contended by two accepters; here one *accepter's* copy is contended by
+      // the two trades he is answering. Bob gives `requestedCard` in both, so
+      // the same `moveCard` guard ought to cover him — but "ought to, by
+      // symmetry" is how a copy got minted on this codebase once already, and
+      // an argument is not a test. One copy of `bobCard`, promised twice.
+      await grant(alice.id, alicePrize.id, 1);
+      await grant(carol.id, carolPrize.id, 1);
+      await grant(bob.id, bobCard.id, 1);
+
+      const fromAlice = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: alicePrize.id,
+        requestedCardId: bobCard.id,
+      });
+      const fromCarol = await pendingTrade({
+        fromUserId: carol.id,
+        toUserId: bob.id,
+        offeredCardId: carolPrize.id,
+        requestedCardId: bobCard.id,
+      });
+      const before = await totalCopiesEverywhere();
+
+      // Which row to lock follows from the order `routes/trades.ts` writes in:
+      // the Trade row first (the claim), then the *offered* card out of the
+      // sender, and only then the requested card out of the accepter. So each
+      // request gets through three rows the other one does not want — its own
+      // trade, its own sender's prize, and bob's new row for that prize — and
+      // arrives at bob's copy of `bobCard` having already done everything else.
+      // That one row is the whole of the overlap, so it is the one to hold.
+      //
+      // **No deadlock is possible in this shape**, and the mirror block below
+      // is the exact contrast. A cycle needs each transaction to be holding
+      // something the other is waiting for; these two share exactly one row, so
+      // whoever reaches it first is waiting on nothing and always finishes,
+      // which frees it for the other. Mirror trades share *two* rows and take
+      // them in opposite orders, which is why that case can answer 500 and this
+      // one cannot — so a 500 here would be a finding, not an accepted outcome,
+      // and the 409 below is asserted exactly rather than as one of two.
+      const pending = await withUserCardLocked(bob.id, bobCard.id, async () => {
+        // Alice's trade claims itself, moves her prize to bob, and parks on the
+        // decrement of bob's only copy with nothing committed.
+        const first = inFlight(accept(bob, fromAlice.id));
+        await waitForLockWaiters(1);
+        // Carol's trade does all of its own work — a different Trade row, a
+        // different sender's prize, a different destination row — and none of
+        // it blocks, so it too reaches bob's copy and queues behind alice's
+        // there. Postgres hands the row to the waiters in the order they
+        // arrived, so alice's wins and carol's is left re-evaluating
+        // `quantity: { gte: 1 }` against a row the winner has deleted. That
+        // count-zero check is the only thing standing here: without it carol's
+        // transaction runs on into the upsert and mints a second copy of a card
+        // bob only ever had one of.
+        const second = inFlight(accept(bob, fromCarol.id));
+        await waitForLockWaiters(2);
+        return { first, second };
+      });
+      const aliceRes = await pending.first;
+      const carolRes = await pending.second;
+
+      expect(aliceRes.status).toBe(200);
+      expect(carolRes.status).toBe(409);
+      // The accepter's side, not the sender's. Both trades are addressed to
+      // bob and it is bob's copy that ran out — telling him carol no longer has
+      // what she offered would name the wrong person and point him at a
+      // recovery that is not his to take.
+      expect(carolRes.body).toEqual({ error: YOU_LOST_IT });
+
+      // One copy before, one copy after, and it is alice who has it.
+      expect(await totalCopiesOf(bobCard.id)).toBe(1);
+      expect(await copiesOf(alice.id, bobCard.id)).toBe(1);
+      expect(await copiesOf(carol.id, bobCard.id)).toBe(0);
+      expect(await hasRowFor(bob.id, bobCard.id)).toBe(false);
+
+      // Bob ends up with one of the two prizes, not both. The loser's first
+      // `moveCard` had already succeeded before its second one failed, so this
+      // is the pair that says the rollback reached back past the failure.
+      expect(await copiesOf(bob.id, alicePrize.id)).toBe(1);
+      expect(await hasRowFor(bob.id, carolPrize.id)).toBe(false);
+      expect(await copiesOf(carol.id, carolPrize.id)).toBe(1);
+      expect(await hasRowFor(alice.id, alicePrize.id)).toBe(false);
+
+      // Carol's trade is still pending and unanswered — bob's second request
+      // was refused, and a refusal is not something a human did to the offer.
+      expect((await storedTrade(fromAlice.id)).status).toBe("ACCEPTED");
+      const loser = await storedTrade(fromCarol.id);
+      expect(loser.status).toBe("PENDING");
+      expect(loser.respondedAt).toBeNull();
+
+      // The assertion that did not have to predict the shape of the mistake.
+      expect(await totalCopiesEverywhere()).toBe(before);
+    });
   });
 
   /**
