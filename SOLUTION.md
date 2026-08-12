@@ -113,7 +113,7 @@ checked by breaking it.
 
 ## What I found in the existing codebase
 
-Four things, all pre-existing, all fixed on this branch.
+Three things, all pre-existing, all fixed on this branch.
 
 **A collectible could be duplicated.** `POST /scan` read `UserCard.quantity` and wrote back
 `existing.quantity + 1` — an absolute value from a stale read. Trading is the second writer of
@@ -133,9 +133,14 @@ one route at a time.
 and an absolute path into the source tree, and it was reachable with no token at all. It now
 answers fixed text and logs the rest server-side.
 
-**User search was enumerable.** Prisma's `contains` compiles to `ILIKE '%' || $1 || '%'` and
-escapes nothing, so `?q=%` returned every non-admin user. `\`, `%` and `_` are now escaped —
-which also makes a username with an underscore searchable.
+### And one I introduced myself
+
+**The user search I added was enumerable.** `GET /users/search` is new in this branch, so this
+one is mine rather than a find: Prisma's `contains` compiles to `ILIKE '%' || $1 || '%'` and
+escapes nothing, so `?q=%` returned every non-admin user. Caught and fixed before merge — `\`,
+`%` and `_` are now escaped, which also makes a username containing an underscore searchable.
+Worth listing next to the three above because it is the same class of defect, and because
+writing the search is what taught me to look at `contains` in the first place.
 
 ---
 
