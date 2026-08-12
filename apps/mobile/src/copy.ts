@@ -246,13 +246,10 @@ export const copy = {
       // staff regardless of collection size, so an empty person is selectable
       // and this is reachable. A dead end for this partner only — `emptyAction`
       // goes back to the search, and must NOT read as abandoning the trade,
-      // because the card you picked to give is kept. Short.
-      //
-      // `empty` interpolates {username} — keep the token, it is what says which
-      // person this dead end is about. The name can be long, so keep the
-      // wording around it short. `emptyBody` and `emptyAction` interpolate
-      // nothing.
-      empty: "{username} has nothing to trade yet.",
+      // because the card you picked to give is kept. Short. No interpolation:
+      // the step's own title names the partner one line above, so "they" has a
+      // referent already on screen.
+      empty: "They have nothing to trade yet.",
       emptyBody: "Your card stays selected.",
       emptyAction: "Choose someone else",
       // CONSTRAINT: they own exactly one card and it is the one you are already
