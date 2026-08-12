@@ -5,6 +5,7 @@ import { copy } from "../copy";
 import { colors, fonts, radius } from "../theme";
 import {
   isActionable,
+  isAnswerable,
   isUnfulfillable,
   partnerOf,
   statusLine,
@@ -13,13 +14,20 @@ import {
 import type { Trade } from "../types";
 
 /**
- * Re-exported from `../trade`, which is where these two moved once the review
+ * Re-exported from `../trade`, which is where these moved once the review
  * screen needed the same answers this row does. The suites reach for them here,
  * and a symbol changing files is no reason for its importers to change lines.
  */
-export { STATUS_KEY, isActionable } from "../trade";
+export { STATUS_KEY, isActionable, isAnswerable } from "../trade";
 
 export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => void }) {
+  // Two different questions, and collapsing them into one is what stranded a
+  // trade forever. `answerable` decides whether the row opens; `actionable`
+  // decides whether it is emphasised as something that can be accepted. An
+  // incoming PENDING offer that can no longer complete is the row where they
+  // disagree: it is not urgent, but declining it is the only way it ever leaves
+  // either board, and the review screen behind it is the only place to do that.
+  const answerable = isAnswerable(trade);
   const actionable = isActionable(trade);
   const unfulfillable = isUnfulfillable(trade);
   const partner = partnerOf(trade);
@@ -49,7 +57,11 @@ export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => voi
           </Text>
         </View>
 
-        {actionable && (
+        {/* The chevron follows the press, not the emphasis: it is the promise
+            that a row leads somewhere, and every row that opens keeps it. On an
+            unfulfillable row that promise is still true — what is behind it is
+            the decline. */}
+        {answerable && (
           <Ionicons name="chevron-forward" size={18} color={colors.black} style={styles.chevron} />
         )}
       </View>
@@ -73,14 +85,19 @@ export function TradeRow({ trade, onPress }: { trade: Trade; onPress?: () => voi
 
   // Inert rows are a plain View, not a disabled Pressable: there is nothing to
   // press, and a pressable that swallows touches is the dead affordance this is
-  // meant to avoid.
-  if (!actionable) return <View style={styles.card}>{body}</View>;
+  // meant to avoid. An unfulfillable incoming offer is not one of them — it
+  // opens, and only the strong border is withheld.
+  if (!answerable) return <View style={styles.card}>{body}</View>;
 
   return (
     <Pressable
       onPress={onPress}
       accessibilityRole="button"
-      style={({ pressed }) => [styles.card, styles.actionable, pressed && styles.pressed]}
+      style={({ pressed }) => [
+        styles.card,
+        actionable && styles.actionable,
+        pressed && styles.pressed,
+      ]}
     >
       {body}
     </Pressable>

@@ -8,6 +8,7 @@ import { TradeCards } from "../../src/components/TradeCards";
 import {
   giveAndGet,
   isActionable,
+  isAnswerable,
   isUnfulfillable,
   partnerOf,
   statusLine,
@@ -376,11 +377,12 @@ export default function TradeReview() {
   // Only the recipient can ever end a trade, and only while it is pending. Note
   // this is deliberately wider than `isActionable`: a trade the API says can no
   // longer complete is still declinable, and refusing to draw the decline
-  // button would strand it on the board forever.
-  const answerable = trade.direction === "received" && trade.status === "PENDING";
+  // button would strand it on the board forever. The board opens rows on this
+  // same predicate, so anything that can reach this screen finds a way off it.
+  const answerable = isAnswerable(trade);
 
   // Accept, specifically. `isActionable` adds `fulfillable !== false` to the
-  // pair above — the same rule the board uses to decide a row leads anywhere,
+  // pair above — the same rule the board uses to emphasise a row as acceptable,
   // reused so the two surfaces cannot disagree about when accepting is possible.
   const canAccept = isActionable(trade);
 

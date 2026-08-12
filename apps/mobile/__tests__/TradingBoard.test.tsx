@@ -39,9 +39,11 @@ const mockApi = jest.mocked(api);
  * The grouping is the point. The board sorts trades by what the viewer can do
  * about them — `needs you`, `waiting`, `history` — which is what replaced the
  * all/incoming/outgoing filter, and the rule that keeps it honest is that
- * `needs you` holds exactly the rows that can be pressed. A row that is listed
+ * `needs you` holds exactly the rows that can be accepted. A row that is listed
  * as needing an answer and then does nothing when tapped is worse than either
- * the filter or the badge this layout removed.
+ * the filter or the badge this layout removed. The converse is not a rule:
+ * `waiting` holds the incoming offers that can no longer complete, and those
+ * still open, because declining them is the only way they ever leave the board.
  */
 
 const SERVER_SENTENCE = "server said no";
