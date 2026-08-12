@@ -2,7 +2,13 @@ import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, View } from "react-native";
 import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { CardTile } from "../../../src/components/CardTile";
-import { SelectableCell } from "../../../src/components/CardPicker";
+import {
+  GRID_COLUMNS,
+  GRID_GAP,
+  GRID_PADDING,
+  SelectableCell,
+  useGridCellWidth,
+} from "../../../src/components/CardPicker";
 import { PrimaryButton } from "../../../src/components/PrimaryButton";
 import { WizardFooter, WizardNotice, WizardScreen } from "../../../src/components/WizardScreen";
 import { api } from "../../../src/api";
@@ -37,6 +43,11 @@ import {
 export default function ChooseOffer() {
   const router = useRouter();
   const draft = useTradeDraft();
+
+  // Up here rather than in `body` below: that function returns early for the
+  // loading, error and empty states, so a hook called inside it would run a
+  // different number of times per render depending on what the API said.
+  const cellWidth = useGridCellWidth();
 
   const [cards, setCards] = useState<CardWithOwnership[] | null>(null);
   // Only ever true before the first answer. A refresh that lands over an
@@ -131,11 +142,11 @@ export default function ChooseOffer() {
       <FlatList
         data={cards}
         keyExtractor={(c) => c.id}
-        numColumns={3}
+        numColumns={GRID_COLUMNS}
         columnWrapperStyle={styles.row}
         contentContainerStyle={styles.grid}
         renderItem={({ item }) => (
-          <SelectableCell selected={draft.offered?.id === item.id}>
+          <SelectableCell selected={draft.offered?.id === item.id} width={cellWidth}>
             {/* The real collectibles tile. These cards are genuinely
                 `CardWithOwnership` with `owned: true`, so it draws art, badges
                 duplicates, and claims nothing untrue. */}
@@ -166,10 +177,12 @@ export default function ChooseOffer() {
   );
 }
 
-const GAP = 10;
-
 const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
-  grid: { paddingHorizontal: 16, paddingBottom: 24 },
-  row: { gap: GAP, marginBottom: GAP },
+  // Padding and gap come from `CardPicker`, because `useGridCellWidth`
+  // subtracts exactly these to size a cell. Two grids and one hook all
+  // reading one set of numbers is what stops a cell from being measured
+  // against padding it is not actually sitting in.
+  grid: { paddingHorizontal: GRID_PADDING, paddingBottom: 24 },
+  row: { gap: GRID_GAP, marginBottom: GRID_GAP },
 });

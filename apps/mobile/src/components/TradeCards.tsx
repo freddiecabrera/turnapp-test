@@ -2,7 +2,7 @@ import { Image, StyleSheet, Text, View, useWindowDimensions } from "react-native
 import { Ionicons } from "@expo/vector-icons";
 import { rarityColor } from "./CardTile";
 import { copy } from "../copy";
-import { colors, fonts, radius } from "../theme";
+import { CARD_ASPECT, colors, fonts, radius } from "../theme";
 import { giveAndGet, type TradeDirection } from "../trade";
 import type { Card } from "../types";
 
@@ -143,18 +143,6 @@ function TradeCard({
     </View>
   );
 }
-
-/**
- * The proportions of a turn card: 575 × 1198, which is what every image in
- * `apps/api/static/cards` is exported at.
- *
- * The box used to be `0.7` — the proportions of a physical trading card, and a
- * reasonable guess at these. It is not what these are. A turn card is much
- * taller: header bar, art, name, rarity pips, universe, type badge and the
- * card's story, stacked. Held in a 0.7 box by `cover`, the whole bottom third
- * was cropped away, so every trade drew two cards cut off mid-sentence.
- */
-const CARD_ASPECT = 575 / 1198;
 
 /**
  * The widest a card is drawn on each surface. `aspectRatio` derives the height,

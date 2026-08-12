@@ -1,7 +1,14 @@
 import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, View } from "react-native";
 import { Redirect, useFocusEffect, useRouter } from "expo-router";
-import { PartnerCardTile, SelectableCell } from "../../../src/components/CardPicker";
+import {
+  GRID_COLUMNS,
+  GRID_GAP,
+  GRID_PADDING,
+  PartnerCardTile,
+  SelectableCell,
+  useGridCellWidth,
+} from "../../../src/components/CardPicker";
 import { PrimaryButton } from "../../../src/components/PrimaryButton";
 import {
   ActionGap,
@@ -46,6 +53,10 @@ import {
 export default function ChooseRequest() {
   const router = useRouter();
   const draft = useTradeDraft();
+
+  // Up here for the same reason as step 2: the grid is rendered from a function
+  // with early returns for loading, error and two different empty states.
+  const cellWidth = useGridCellWidth();
   const partnerId = draft.partner?.id ?? null;
   const offeredId = draft.offered?.id ?? null;
 
@@ -193,11 +204,11 @@ export default function ChooseRequest() {
       <FlatList
         data={pickable}
         keyExtractor={(c) => c.id}
-        numColumns={3}
+        numColumns={GRID_COLUMNS}
         columnWrapperStyle={styles.row}
         contentContainerStyle={styles.grid}
         renderItem={({ item }) => (
-          <SelectableCell selected={draft.requested?.id === item.id}>
+          <SelectableCell selected={draft.requested?.id === item.id} width={cellWidth}>
             <PartnerCardTile
               card={item}
               quantity={item.quantity}
@@ -229,10 +240,12 @@ export default function ChooseRequest() {
   );
 }
 
-const GAP = 10;
-
 const styles = StyleSheet.create({
   centered: { flex: 1, alignItems: "center", justifyContent: "center", padding: 28 },
-  grid: { paddingHorizontal: 16, paddingBottom: 24 },
-  row: { gap: GAP, marginBottom: GAP },
+  // Padding and gap come from `CardPicker`, because `useGridCellWidth`
+  // subtracts exactly these to size a cell. Two grids and one hook all
+  // reading one set of numbers is what stops a cell from being measured
+  // against padding it is not actually sitting in.
+  grid: { paddingHorizontal: GRID_PADDING, paddingBottom: 24 },
+  row: { gap: GRID_GAP, marginBottom: GRID_GAP },
 });

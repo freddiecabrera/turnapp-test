@@ -1,8 +1,15 @@
 import type { ReactNode } from "react";
-import { Image, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  Image,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+  useWindowDimensions,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { rarityColor } from "./CardTile";
-import { colors, fonts, radius } from "../theme";
+import { CARD_ASPECT, colors, fonts, radius } from "../theme";
 import type { Card } from "../types";
 
 /**
@@ -24,6 +31,35 @@ import type { Card } from "../types";
  * a false claim in the type.
  */
 
+/** The grid both steps draw. Exported so the two screens cannot drift apart. */
+export const GRID_COLUMNS = 3;
+export const GRID_GAP = 10;
+export const GRID_PADDING = 16;
+
+/**
+ * How wide one cell of the picker grid is.
+ *
+ * Measured rather than left to `flex: 1`, which is what made a card's size
+ * depend on how many cards happened to share its row. A `FlatList` with
+ * `numColumns={3}` lays out a short final row as a row of that many flexible
+ * children, so a collection of seven drew six normal cards and then one card
+ * three times the size of the others; four drew a full-width one. The card a
+ * person is choosing between is not supposed to change size according to how
+ * many other cards exist.
+ *
+ * Every cell is now this wide whatever else is on its row, and a short row
+ * simply ends early with the gap after it — which is what a grid looks like.
+ */
+export function gridCellWidth(windowWidth: number): number {
+  const gutters = GRID_PADDING * 2 + GRID_GAP * (GRID_COLUMNS - 1);
+  return (windowWidth - gutters) / GRID_COLUMNS;
+}
+
+/** `gridCellWidth` against the live window. */
+export function useGridCellWidth(): number {
+  return gridCellWidth(useWindowDimensions().width);
+}
+
 /**
  * The selection ring, drawn around whatever tile a step renders.
  *
@@ -33,13 +69,16 @@ import type { Card } from "../types";
  */
 export function SelectableCell({
   selected,
+  width,
   children,
 }: {
   selected: boolean;
+  /** From `useGridCellWidth`. Fixed, so a short row cannot stretch its cards. */
+  width: number;
   children: ReactNode;
 }) {
   return (
-    <View style={[styles.cell, selected && styles.cellSelected]}>
+    <View style={[styles.cell, { width }, selected && styles.cellSelected]}>
       {children}
       {selected && (
         <View style={styles.check}>
@@ -79,7 +118,7 @@ export function PartnerCardTile({
     <Pressable style={styles.tile} onPress={onPress} accessibilityRole="button">
       <View style={styles.imageBox}>
         {card.imageUrl ? (
-          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="cover" />
+          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="contain" />
         ) : (
           // Not the locked card-back: that glyph means "you don't own this",
           // which is true of every card on this screen and is not the fact
@@ -109,8 +148,8 @@ export function PartnerCardTile({
 }
 
 const styles = StyleSheet.create({
+  // `width` is applied inline, measured against the window.
   cell: {
-    flex: 1,
     borderWidth: 2,
     borderColor: "transparent",
     borderRadius: radius.md,
@@ -131,7 +170,7 @@ const styles = StyleSheet.create({
 
   tile: { flex: 1 },
   imageBox: {
-    aspectRatio: 0.7,
+    aspectRatio: CARD_ASPECT,
     borderRadius: radius.sm,
     overflow: "hidden",
     backgroundColor: colors.lightGrey,
