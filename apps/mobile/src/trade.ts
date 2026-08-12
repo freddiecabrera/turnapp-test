@@ -56,30 +56,45 @@ export function partnerOf(trade: Trade): UserSummary {
 }
 
 /**
- * Whether this trade does anything when pressed.
+ * Whether this trade can still be answered at all — opened, and then accepted
+ * or declined.
  *
- * Exactly one of the eight direction/status/fulfillable combinations is
- * actionable: a PENDING trade sent *to* the viewer that can still complete.
+ * A PENDING trade sent *to* the viewer, and deliberately **not** narrowed by
+ * `fulfillable`: an offer whose cards have since moved can no longer be
+ * accepted, but declining it is still both possible and the only thing that
+ * ends it. `POST /trades/:id/decline` does not re-check ownership, precisely so
+ * a dead offer can still be refused.
  *
- * Two rules are load-bearing here.
- *
- * **A sent trade has no action, ever.** There is no cancel or withdraw
+ * **A sent trade is never answerable.** There is no cancel or withdraw
  * endpoint, and the sender cannot decline their own offer — `POST
  * /trades/:id/decline` 403s anyone but the recipient, deliberately, because
  * reporting a withdrawal as the other person's refusal would corrupt the one
  * column whose job is to record what a human did. So an outgoing row is inert
  * in every status.
+ */
+export function isAnswerable(trade: Trade): boolean {
+  return trade.direction === "received" && trade.status === "PENDING";
+}
+
+/**
+ * Whether this trade can still be *accepted*, specifically.
  *
- * **`fulfillable === false` is not actionable**, and the test is against
+ * `isAnswerable` plus a card check: exactly one of the eight
+ * direction/status/fulfillable combinations gets here, a PENDING trade sent to
+ * the viewer that can still complete. This is the accept button's gate and the
+ * board's emphasis rule — it is **not** what decides whether a row opens, which
+ * is `isAnswerable`. Gating the press on this is what stranded an unfulfillable
+ * incoming offer on both boards forever: accept was correctly impossible,
+ * decline was the only exit, and an unopenable row removed it.
+ *
+ * **`fulfillable === false` cannot be accepted**, and the test is against
  * `false` rather than falsiness — see `isUnfulfillable`. A `null` on a live
  * PENDING row is not something `GET /trades` produces, but if it ever appeared,
- * leaving the row actionable is the safe side: accept re-verifies ownership
- * atomically and refuses on its own terms.
+ * leaving accept live is the safe side: accept re-verifies ownership atomically
+ * and refuses on its own terms.
  */
 export function isActionable(trade: Trade): boolean {
-  return (
-    trade.direction === "received" && trade.status === "PENDING" && trade.fulfillable !== false
-  );
+  return isAnswerable(trade) && trade.fulfillable !== false;
 }
 
 /**
@@ -110,11 +125,12 @@ export type BoardSection = (typeof BOARD_SECTIONS)[number];
  * the one thing the filter could not ask.
  *
  * `needsYou` is exactly `isActionable`, so the section a row sits under and
- * whether it can be pressed cannot disagree. Note what that puts in `waiting`:
- * an incoming PENDING trade whose cards have since moved is unanswerable here
- * (the row is inert, `fulfillable` is `false`), so it is not something the
- * viewer can act on and does not belong above the fold with the ones that are.
- * It is still unanswered, so it is not history either.
+ * whether it promises an answer cannot disagree. Note what that puts in
+ * `waiting`: an incoming PENDING trade whose cards have since moved can no
+ * longer be accepted (`fulfillable` is `false`), so it does not belong above
+ * the fold with the ones that can. It is still unanswered, so it is not history
+ * either — and it still opens, because declining it is the only thing that ever
+ * takes it off the board.
  */
 export function sectionOf(trade: Trade): BoardSection {
   if (isActionable(trade)) return "needsYou";
