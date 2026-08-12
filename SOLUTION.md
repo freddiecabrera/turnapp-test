@@ -25,9 +25,47 @@ permanent log rather than a queue of open offers, so a declined trade still read
 on both boards.
 
 **The mobile screens sit on top of it**: the trading board behind the existing `trading board`
-pill, a four-step create-trade wizard, and the approve/decline screen — with 128 mobile tests
+pill, a four-step create-trade wizard, and the approve/decline screen — with 158 mobile tests
 beside them. Every user-facing string lives in one file, `apps/mobile/src/copy.ts`, so the
 wording is editable without touching a component.
+
+### A design pass over the board
+
+The first version of the board worked and read badly, and two later PRs fixed that rather than
+leaving it as shipped-and-defended.
+
+It had stacked **four rows of controls above the first trade**: the collectibles pill row it
+lives under, an `all / incoming / outgoing` filter, a black pending-count badge, and an
+outlined `+ Start a trade` pill. Three wore the same shape — pill radius, 1.5px black border —
+so navigation, filtering and the one control that *creates* something all read as the same
+kind of object, and two were filled solid black at once.
+
+- **The filter became section headers.** A trade sits under `needs you`, `waiting` or
+  `history`, each carrying its own count. This answers the question people open the board with
+  — what needs me? — which a direction filter cannot ask, because `incoming` mixes the one
+  unanswered offer in with every incoming trade already settled. `needsYou` is exactly
+  `isActionable`, so the section a row sits under and whether it can be pressed cannot
+  disagree. The pending-count badge folded into the header that was going to be drawn anyway.
+- **Status moved into a chip in the row header** — the most scannable fact about a trade was
+  the last thing on the card, under two pieces of art. Only an actionable row gets the filled
+  chip, so the screen has one strongest emphasis rather than three.
+- **`Start a trade` became a floating button** with one permanent home, instead of being a
+  full-width button on an empty board and a small outlined pill on a populated one.
+- **Dates read relatively** for the first week, counted in local calendar days — a trade sent
+  at 11pm is `yesterday` from midnight, not for another twenty-two hours.
+
+**And every card is drawn whole.** Each card box was `aspectRatio: 0.7` — the proportions of a
+physical trading card. A turn card is 575 × 1198, a ratio of 0.48, and `cover` in a box of the
+wrong shape had been cropping the bottom third off every card in the feature: the story, cut
+mid-sentence, including on the screen where somebody decides whether to accept. `CARD_ASPECT`
+now lives in `theme.ts` because four surfaces draw a card and they have to agree on its shape.
+
+The wizard's grids had a second bug behind the same symptom: `SelectableCell` was `flex: 1`,
+and a `FlatList` with `numColumns={3}` lays a short final row out as a row of *that many*
+flexible children — so a collection of seven drew six normal cards and then one card three
+times the size of its neighbours, and a collection of four drew a full-width one. Cells are
+measured now, and a test pins the property that makes that correct: a full row of cells plus
+its gutters comes to exactly the window width, at every phone size from 320 to 1024pt.
 
 ---
 
@@ -45,7 +83,7 @@ npm run api:setup                   # docker postgres + prisma generate + migrat
 One command is the whole gate:
 
 ```bash
-npm run verify   # api typecheck + mobile typecheck + admin build + 293 tests
+npm run verify   # api typecheck + mobile typecheck + admin build + 323 tests
 ```
 
 The tests are integration tests against real Postgres, over HTTP with supertest, on a
@@ -178,8 +216,9 @@ anticipated: the partner's only card being the one you're already offering.
 
 And one I didn't expect to write. I filed **the trading hub losing scroll position** against
 the live app, with the hypothesis that a remount was resetting the list — then reproduced it
-in my own board, where switching tabs unmounted it and took the filter and scroll offset with
-it. Fixed here. Writing the finding is not the same as being immune to it.
+in my own board, where switching tabs unmounted it and took its scroll offset — and, at the
+time, its filter — with it. Fixed here. Writing the finding is not the same as being immune
+to it.
 
 ---
 
@@ -193,8 +232,8 @@ it. Fixed here. Writing the finding is not the same as being immune to it.
   Postgres resolves it by aborting one, which is data-safe and surfaces as a 500.
 - **Escrow.** The systematic fix for offering one copy to four people. It needs trade expiry
   to avoid locking cards forever, and expiry is out of scope.
-- **Push notifications.** `POST /trades` is the hook point; the board's pending-incoming count
-  is the in-app stand-in the brief allows.
+- **Push notifications.** `POST /trades` is the hook point; the board's `needs you` count is
+  the in-app stand-in the brief allows.
 - Bundles, points-in-trade, real-time, chat and admin trade management are excluded by
   `TAKE_HOME.md`.
 
