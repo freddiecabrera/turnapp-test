@@ -5,8 +5,15 @@ import { copy } from "../copy";
 import { colors, fonts, radius } from "../theme";
 import type { Trade, TradeStatus } from "../types";
 
-/** `TradeStatus` is SCREAMING_CASE on the wire; `copy.board.status` is keyed lowercase. */
-const STATUS_KEY = {
+/**
+ * `TradeStatus` is SCREAMING_CASE on the wire; `copy.board.status` is keyed
+ * lowercase.
+ *
+ * Exported because the approve/decline screen renders the same sentence for a
+ * trade it cannot act on, and a second copy of this map would be a second place
+ * to fix the day a fourth status appears.
+ */
+export const STATUS_KEY = {
   PENDING: "pending",
   ACCEPTED: "accepted",
   DECLINED: "declined",

@@ -189,8 +189,9 @@ export const copy = {
   /**
    * TH-12 — the approve/decline screen (one pushed screen).
    *
-   * Slots only, same rules as `wizard`. Note there is no `GET /trades/:id`, so
-   * this screen is handed its trade rather than fetching one.
+   * Slots only, same rules as `wizard`. Note there is no `GET /trades/:id`: the
+   * screen reads the whole board and selects its trade by id, so it has a real
+   * loading state, a real not-found state, and slots for both below.
    */
   review: {
     // CONSTRAINT: screen title. Short. No interpolation.
@@ -199,6 +200,11 @@ export const copy = {
     // CONSTRAINT: names who sent the offer. Interpolates {username} — keep the
     // token. One short line.
     from: "From {username}",
+
+    // CONSTRAINT: the same line for a trade the viewer SENT, which this screen
+    // shows read-only — the board never opens one, so it is reached by a link.
+    // Interpolates {username}; keep the token. One short line.
+    to: "To {username}",
 
     // CONSTRAINT: the two actions. `accept` swaps the cards immediately;
     // `decline` moves nothing. Button labels, two words at most.
@@ -225,13 +231,104 @@ export const copy = {
 
     // CONSTRAINT: shown when `fulfillable` is exactly `false` — one side no
     // longer owns their card, so accepting would be refused by the server. The
-    // accept action is hidden in this state, so this line has to explain why
-    // there is nothing to press. Two lines at most. No interpolation.
+    // accept action stays visible and disabled in this state, so this line has
+    // to explain why it cannot be pressed. This is the SIDE-NEUTRAL wording,
+    // used when the screen cannot tell whose card went missing; the two
+    // side-precise lines below replace it when it can. Two lines at most. No
+    // interpolation.
     unfulfillable: "This trade can no longer be completed.",
+
+    // CONSTRAINT: the same fact as `unfulfillable`, once the screen knows which
+    // side is broken. `fulfillable` is one boolean over both ownership checks,
+    // so the side is inferred from the viewer's own collection — see
+    // `src/trade-review.ts`. These are not restatements of an API error: `GET
+    // /trades` sends the bare boolean and never words it. Decline still works
+    // in both cases, so neither may read as a dead end. Two lines at most each.
+    // No interpolation.
+    unfulfillableYou: "You no longer have the card they asked for.",
+    unfulfillableThem: "They no longer have the card they offered.",
+
+    // CONSTRAINT: the viewer's own collection, joined in after the trade is
+    // already on screen. `lastCopy` marks the card being given away when the
+    // viewer holds exactly one; `alreadyOwn` marks the card being received when
+    // the viewer already holds at least one, and interpolates {count} (always
+    // >= 1) — keep the token. Both sit under a card thumbnail, so one short
+    // line each. Neither is a warning: trading a last copy is a legitimate
+    // thing to do and this only makes sure it is not done unknowingly.
+    ownership: {
+      lastCopy: "Your last copy.",
+      alreadyOwn: "You already own {count}.",
+    },
+
+    // CONSTRAINT: sits under the two actions while the trade can still be
+    // answered. Says the offer cannot be withdrawn — there is no cancel
+    // endpoint and decline refuses anyone but the recipient — so answering it
+    // is the only thing that ever ends it. Must not read as pressure or as a
+    // deadline. Two short lines at most. No interpolation.
+    onlyYouCanAnswer: "Only you can answer this. The sender can't take it back.",
+
+    // CONSTRAINT: shown under the spinner while the trade is being looked up on
+    // entry. Two words at most. No interpolation.
+    loading: "Loading trade...",
+
+    // CONSTRAINT: the board loaded and this trade was not on it. Reachable from
+    // a stale board or a link to someone else's trade, and the API cannot tell
+    // those two apart — so this must not accuse anyone or claim the trade
+    // exists. `title` one line, `body` at most two. No interpolation.
+    notFound: {
+      title: "Trade not found.",
+      body: "This trade isn't on your board.",
+    },
+
+    // CONSTRAINT: the trade could not be loaded at all. `body` is used ONLY
+    // when the failure produced no server message — a dropped connection, a
+    // timeout; when the server did answer with an error, that sentence is
+    // rendered instead of this one, verbatim. `retry` is a button label.
+    loadError: {
+      title: "Couldn't load this trade.",
+      body: "Check your connection and try again.",
+      retry: "Try again",
+    },
+
+    // CONSTRAINT: the way out of every finished state and every dead end. The
+    // board is where a trade's current truth lives, which is what this points
+    // at. Button label, three words at most. No interpolation.
+    backToBoard: "Back to trades",
 
     // CONSTRAINT: outcome confirmations after the server answers. Short.
     accepted: "Trade accepted.",
     declined: "Trade declined.",
+
+    // CONSTRAINT: the sub-lines under those two. `acceptedBody` may interpolate
+    // {give} and {get} card names — the cards have already moved by the time it
+    // is shown, so it must read as done, not as in progress. `declinedBody`
+    // must say that nothing moved. One or two lines each.
+    acceptedBody: "You gave {give} and got {get}.",
+    declinedBody: "Nothing was traded.",
+
+    // CONSTRAINT: the full-screen result when an answer was refused. `title`
+    // heads all of them, and the server's own sentence is rendered underneath
+    // it verbatim — it is already user-facing copy and says more than any of
+    // these can. `body` replaces that sentence ONLY when the failure never
+    // reached the server.
+    failed: {
+      title: "That didn't go through.",
+      body: "Check your connection and try again.",
+
+      // CONSTRAINT: button label. Offered only for failures a second attempt
+      // could actually clear — never for a trade that has already been
+      // answered, where retrying is guaranteed to fail the same way.
+      retry: "Try again",
+
+      // CONSTRAINT: the recovery when accepting was refused because one of the
+      // cards is gone. The trade is still pending and decline never checks
+      // ownership, so this is the one answer guaranteed to work. `action` is a
+      // button label. `hint` sits under it and must carry what the decline
+      // confirmation would have said — nothing is traded, and it is final —
+      // because this button acts on the first press. Two lines at most.
+      declineInstead: "Decline instead",
+      declineInsteadHint: "Nothing will be traded, and declining always works. This is final.",
+    },
   },
 } as const;
 
