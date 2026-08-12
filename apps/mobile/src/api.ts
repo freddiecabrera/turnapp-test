@@ -1,15 +1,83 @@
 import { API_URL, resolveImageUrl } from "./config";
 import type {
   AuthResponse,
+  Card,
   CardWithOwnership,
+  CreateTradeRequest,
+  OwnedCard,
   ScanResult,
   Season,
+  Trade,
   User,
+  UserSummary,
   WalletResponse,
 } from "./types";
 
-function withImageUrl(card: CardWithOwnership): CardWithOwnership {
+/**
+ * Resolve a card's relative `imageUrl` into something the device can load.
+ *
+ * Generic over the card shape rather than fixed to `CardWithOwnership`, because
+ * three different DTOs carry a card now: the collection grid's
+ * `CardWithOwnership`, another user's `OwnedCard`, and the two plain `Card`s on
+ * a `Trade`. The API returns `/static/cards/...` for all of them by design —
+ * each client resolves it against the host it used to reach the API — so a DTO
+ * that skips this renders a blank image on a physical device while looking
+ * perfectly fine in a simulator, where the relative path happens to resolve.
+ */
+function withImageUrl<T extends Card>(card: T): T {
   return { ...card, imageUrl: resolveImageUrl(card.imageUrl) };
+}
+
+/** Both of a trade's cards, resolved. Neither is optional, so neither is skipped. */
+function withTradeImages(trade: Trade): Trade {
+  return {
+    ...trade,
+    offeredCard: withImageUrl(trade.offeredCard),
+    requestedCard: withImageUrl(trade.requestedCard),
+  };
+}
+
+/**
+ * A failure the server described.
+ *
+ * The distinction this class exists to make: an `ApiError`'s `message` is a
+ * sentence the API wrote for a human and the UI should render verbatim
+ * (AGENTS.md, "Conventions" — routes answer `{ error }` and those strings are
+ * user-facing copy). Anything else thrown out of `request` is not. A dropped
+ * connection rejects with whatever the platform's fetch says — "Network request
+ * failed", a URL, a native stack — which is a diagnostic, not copy, and must
+ * never reach a screen.
+ *
+ * So `e instanceof ApiError` is the test for "safe to show as-is", and every
+ * other rejection falls back to a string from `copy.ts`. `status` is carried
+ * for callers that want to branch on it; the message is usually the better
+ * answer, since the server already worded the 403, 404 and 409 cases.
+ */
+export class ApiError extends Error {
+  readonly status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
+}
+
+/**
+ * The string to show for a failure, given the copy to fall back on.
+ *
+ * The rule `ApiError` exists to encode, written as a call. An `ApiError`'s
+ * message is a sentence the server wrote for a human and is rendered verbatim —
+ * the routes answer `{ error }` and those strings are user-facing copy
+ * (AGENTS.md, "Conventions"). Anything else is a rejected fetch whose message is
+ * a diagnostic ("Network request failed", a URL, a native stack) and must never
+ * reach a screen, so it becomes copy instead.
+ *
+ * `fallback` is per call site rather than one shared string: every surface that
+ * renders a failure has its own sentence for the request it just lost.
+ */
+export function messageFor(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
 }
 
 let authToken: string | null = null;
@@ -25,8 +93,13 @@ async function request<T>(path: string, options: RequestInit = {}): Promise<T> {
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
   if (!res.ok) {
-    const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `Request failed (${res.status})`);
+    const body: unknown = await res.json().catch(() => ({}));
+    const error = (body as { error?: unknown }).error;
+    // Only a string the server actually sent becomes an `ApiError`. The
+    // fallback below is a status line rather than copy, so it stays a plain
+    // Error and screens replace it with their own wording.
+    if (typeof error === "string" && error) throw new ApiError(res.status, error);
+    throw new Error(`Request failed (${res.status})`);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
@@ -41,13 +114,70 @@ export const api = {
   me: () => request<User>("/auth/me"),
   seasons: () => request<Season[]>("/seasons"),
   cards: (seasonId?: string) =>
-    request<CardWithOwnership[]>(`/cards${seasonId ? `?seasonId=${seasonId}` : ""}`).then((cards) =>
-      cards.map(withImageUrl)
-    ),
+    request<CardWithOwnership[]>(
+      // Encoded rather than interpolated raw, for the same reason `searchUsers`
+      // below encodes its query: a value that reaches a query string unescaped
+      // can change the shape of that query string instead of being sent as a
+      // value. Today's only caller passes a cuid, which survives either way —
+      // which is exactly what makes this the kind of bug that is found by its
+      // second caller rather than its first.
+      `/cards${seasonId ? `?seasonId=${encodeURIComponent(seasonId)}` : ""}`
+    ).then((cards) => cards.map(withImageUrl)),
   card: (id: string) => request<CardWithOwnership>(`/cards/${id}`).then(withImageUrl),
   wallet: () => request<WalletResponse>("/wallet"),
   scan: (code: string) =>
     request<ScanResult>("/scan", { method: "POST", body: JSON.stringify({ code }) }).then(
       (result) => ({ ...result, card: withImageUrl(result.card) })
+    ),
+
+  /**
+   * The whole board: every trade the caller has ever been in, both directions,
+   * ordered `createdAt DESC, id DESC`.
+   *
+   * Takes no parameters — there is no server-side filtering and no pagination —
+   * so all/incoming/outgoing is a client-side filter on `direction`. Note the
+   * order is by `createdAt`, not `respondedAt`: a month-old trade answered
+   * today stays a month down the list.
+   */
+  trades: () => request<Trade[]>("/trades").then((trades) => trades.map(withTradeImages)),
+
+  /** Offer one of your cards for one of theirs. The cards do not move until they accept. */
+  createTrade: (toUserId: string, offeredCardId: string, requestedCardId: string) =>
+    request<Trade>("/trades", {
+      method: "POST",
+      body: JSON.stringify({
+        toUserId,
+        offeredCardId,
+        requestedCardId,
+      } satisfies CreateTradeRequest),
+    }).then(withTradeImages),
+
+  /** Accept a trade sent to you. Swaps both cards atomically; only the recipient may call it. */
+  acceptTrade: (id: string) =>
+    request<Trade>(`/trades/${encodeURIComponent(id)}/accept`, { method: "POST" }).then(
+      withTradeImages
+    ),
+
+  /** Decline a trade sent to you. Nothing moves; only the recipient may call it. */
+  declineTrade: (id: string) =>
+    request<Trade>(`/trades/${encodeURIComponent(id)}/decline`, { method: "POST" }).then(
+      withTradeImages
+    ),
+
+  /**
+   * Find a trading partner by username fragment or exact ID number.
+   *
+   * Returns at most 20, never the caller, never a staff account, and an empty
+   * array for an empty query. `q` is encoded rather than interpolated raw: a
+   * username fragment is arbitrary user input, and an `&`, `+` or `#` in it
+   * would otherwise change the query string's shape instead of being searched
+   * for.
+   */
+  searchUsers: (q: string) => request<UserSummary[]>(`/users/search?q=${encodeURIComponent(q)}`),
+
+  /** What another user owns, so the caller can pick a card to ask for. Collections are public. */
+  userCards: (id: string) =>
+    request<OwnedCard[]>(`/users/${encodeURIComponent(id)}/cards`).then((cards) =>
+      cards.map(withImageUrl)
     ),
 };

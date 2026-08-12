@@ -1,0 +1,214 @@
+import { useState } from "react";
+import { ScrollView, StyleSheet, Text, View } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
+import { Redirect, useRouter } from "expo-router";
+import { PrimaryButton } from "../../../src/components/PrimaryButton";
+import { TradeCards } from "../../../src/components/TradeCards";
+import {
+  ActionGap,
+  WizardFooter,
+  WizardNotice,
+  WizardScreen,
+} from "../../../src/components/WizardScreen";
+import { api } from "../../../src/api";
+import { copy, fill } from "../../../src/copy";
+import { colors, fonts } from "../../../src/theme";
+import type { Trade } from "../../../src/types";
+import {
+  messageFor,
+  sendRecoveryFor,
+  useTradeDraft,
+  type SendRecovery,
+} from "../../../src/wizard";
+
+/**
+ * TH-11, step 4 of 4 — check the offer, then send it.
+ *
+ * The pair is drawn by `TradeCards` with `direction="sent"`, which is the truth
+ * about a trade being composed by its sender: the offered card is the one being
+ * given up and the requested one is what comes back. Nothing here re-derives
+ * that inversion, because the board and the approve screen do not either.
+ *
+ * `POST /trades` answers `201` with the whole `Trade` — status, direction,
+ * fulfillability, both parties, both cards — so the confirmation is rendered
+ * from the response and needs no follow-up request. The board is left to
+ * refresh itself on focus, which it already does, and `createdAt DESC` puts the
+ * new row first.
+ */
+
+export default function ReviewOffer() {
+  const router = useRouter();
+  const draft = useTradeDraft();
+
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<Trade | null>(null);
+  const [failure, setFailure] = useState<{ message: string; recovery: SendRecovery } | null>(
+    null
+  );
+
+  const { partner, offered, requested } = draft;
+
+  // Back to the board, out of the whole wizard. Every step is on the root
+  // stack, so this is one call rather than a walk back through four screens.
+  const toBoard = () => router.dismissAll();
+
+  async function send() {
+    if (partner === null || offered === null || requested === null) return;
+    setSending(true);
+    setFailure(null);
+    try {
+      setSent(await api.createTrade(partner.id, offered.id, requested.id));
+    } catch (e) {
+      setFailure({
+        message: messageFor(e, copy.wizard.review.error.body),
+        recovery: sendRecoveryFor(e),
+      });
+    } finally {
+      setSending(false);
+    }
+  }
+
+  // Guarded after `sent` on purpose. The draft is not cleared on success — the
+  // confirmation renders from the response, not from the draft — but ordering
+  // these the other way would make the screen depend on that never changing.
+  if (sent === null && (partner === null || offered === null || requested === null)) {
+    return <Redirect href="/trade/new" />;
+  }
+
+  if (sent !== null) {
+    return (
+      <WizardScreen step={4} title={copy.wizard.review.title} canGoBack={false}>
+        <ScrollView contentContainerStyle={styles.content}>
+          {/* The recipient's name is read off the created trade rather than the
+              draft, for the same reason the cards below are: `POST /trades`
+              records the caller as `fromUser`, so `toUser` is who this offer
+              actually went to. Taking it from `draft.partner` would also make
+              this state depend on the draft outliving the send, which the
+              guard above is deliberately ordered not to assume. */}
+          <View style={styles.sentHead}>
+            <Ionicons name="checkmark-circle" size={40} color={colors.black} />
+            <Text style={styles.sentTitle}>
+              {fill(copy.wizard.review.success, { username: sent.toUser.username })}
+            </Text>
+            <Text style={styles.sentBody}>{copy.wizard.review.successBody}</Text>
+          </View>
+
+          {/* Drawn from the response rather than the draft: this is the trade
+              that exists, as the server serialized it for this viewer. */}
+          <TradeCards
+            direction={sent.direction}
+            offeredCard={sent.offeredCard}
+            requestedCard={sent.requestedCard}
+            size="detail"
+          />
+        </ScrollView>
+
+        <WizardFooter>
+          <PrimaryButton label={copy.wizard.review.successAction} onPress={toBoard} />
+        </WizardFooter>
+      </WizardScreen>
+    );
+  }
+
+  if (failure !== null) {
+    return (
+      <WizardScreen step={4} title={copy.wizard.review.title}>
+        <WizardNotice
+          icon="alert-circle-outline"
+          title={copy.wizard.review.error.title}
+          // The server's sentence when there was one; `messageFor` has already
+          // replaced a raw fetch diagnostic with copy.
+          body={failure.message}
+        >
+          {failure.recovery === "board" ? (
+            <PrimaryButton label={copy.wizard.review.error.board} onPress={toBoard} />
+          ) : failure.recovery === "repick" ? (
+            <>
+              <PrimaryButton
+                label={copy.wizard.review.error.changeRequest}
+                onPress={() => router.back()}
+              />
+              <ActionGap />
+              <PrimaryButton
+                label={copy.wizard.review.error.changeOffer}
+                variant="outline"
+                onPress={() => router.dismissTo("/trade/new/offer")}
+              />
+              <ActionGap />
+              <PrimaryButton
+                label={copy.wizard.review.error.changePartner}
+                variant="outline"
+                onPress={() => router.dismissTo("/trade/new")}
+              />
+            </>
+          ) : (
+            <>
+              <PrimaryButton label={copy.wizard.review.error.retry} onPress={send} />
+              <ActionGap />
+              <PrimaryButton
+                label={copy.wizard.review.cancel}
+                variant="outline"
+                onPress={toBoard}
+              />
+            </>
+          )}
+        </WizardNotice>
+      </WizardScreen>
+    );
+  }
+
+  // `sent` and `failure` are both null here, and the redirect above has already
+  // established that all three selections exist — but TypeScript cannot carry
+  // that across the branches, so this narrows them once for the render.
+  if (partner === null || offered === null || requested === null) return null;
+
+  return (
+    <WizardScreen step={4} title={copy.wizard.review.title}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <Text style={styles.to}>{fill(copy.wizard.review.to, { username: partner.username })}</Text>
+        <TradeCards
+          direction="sent"
+          offeredCard={offered}
+          requestedCard={requested}
+          size="detail"
+        />
+      </ScrollView>
+
+      <WizardFooter>
+        <PrimaryButton label={copy.wizard.review.confirm} loading={sending} onPress={send} />
+        <ActionGap />
+        <PrimaryButton
+          label={copy.wizard.review.cancel}
+          variant="outline"
+          disabled={sending}
+          onPress={toBoard}
+        />
+      </WizardFooter>
+    </WizardScreen>
+  );
+}
+
+const styles = StyleSheet.create({
+  content: { paddingHorizontal: 16, paddingBottom: 24 },
+  to: { fontFamily: fonts.bold, fontSize: 15, color: colors.black, marginBottom: 18 },
+
+  sentHead: { alignItems: "center", marginBottom: 28 },
+  // Centred explicitly, not just by `alignItems`: the title now carries a
+  // username of unbounded length, and once it wraps the Text fills the row and
+  // every line after the first would sit left of a centred icon and body.
+  sentTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 22,
+    color: colors.black,
+    textAlign: "center",
+    marginTop: 12,
+  },
+  sentBody: {
+    fontFamily: fonts.regular,
+    fontSize: 15,
+    color: colors.grey,
+    textAlign: "center",
+    marginTop: 8,
+    lineHeight: 22,
+  },
+});

@@ -41,6 +41,12 @@ export interface PointsTransaction {
   createdAt: string;
 }
 
+/** A card a user owns, with collection metadata. Returned by GET /users/:id/cards. */
+export interface OwnedCard extends Card {
+  quantity: number;
+  firstScannedAt: string;
+}
+
 export interface WalletResponse {
   pointsBalance: number;
   tiers: number[];
@@ -54,9 +60,47 @@ export interface ScanResult {
   alreadyOwned: boolean;
 }
 
+/** A trade's lifecycle. Only PENDING trades can be acted on. */
+export type TradeStatus = "PENDING" | "ACCEPTED" | "DECLINED";
+
+/** A user as seen by somebody else — no email, no points balance. */
+export interface UserSummary {
+  id: string;
+  username: string;
+  userIdNumber: number;
+}
+
+export interface Trade {
+  id: string;
+  status: TradeStatus;
+  /**
+   * Which side of the trade you're on. `offeredCard` always comes from
+   * `fromUser`, so the same row reads inverted for the two parties — use this
+   * to work out which card you're giving up.
+   */
+  direction: "sent" | "received";
+  /**
+   * Both sides still own their cards. `null` means not applicable — either
+   * the trade was answered, or this endpoint didn't compute it. Not `false`.
+   */
+  fulfillable: boolean | null;
+  fromUser: UserSummary;
+  toUser: UserSummary;
+  offeredCard: Card;
+  requestedCard: Card;
+  createdAt: string;
+  respondedAt: string | null;
+}
+
+export interface CreateTradeRequest {
+  toUserId: string;
+  offeredCardId: string;
+  requestedCardId: string;
+}
+
 export interface AuthResponse {
   token: string;
   user: User;
 }
 
-export const POINT_TIERS = [100, 500, 1000, 5000, 10000];
+export const POINT_TIERS = [100, 500, 1000, 5000, 10000] as const;

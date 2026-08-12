@@ -1,0 +1,12 @@
+{
+  // Vitest strips types rather than checking them, so without this the test
+  // harness is never typechecked at all — a renamed Prisma field would leave
+  // `row?.quantity ?? 0` compiling to `0` and the suite passing for the wrong
+  // reason. Kept separate from tsconfig.json so `npm run build` still emits
+  // only the app, not the tests.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["test", "vitest.config.ts"]
+}
