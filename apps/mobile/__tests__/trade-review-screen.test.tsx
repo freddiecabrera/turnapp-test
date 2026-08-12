@@ -31,9 +31,9 @@ jest.mock("expo-router", () => ({
   useLocalSearchParams: jest.fn(),
 }));
 
-// `ApiError` is kept real: `recoveryFor` branches on `instanceof`, so a stubbed
-// class would send every failure down the retry path and the classification
-// under test would never run.
+// `ApiError` is kept real: `answerRecoveryFor` branches on `instanceof`, so a
+// stubbed class would send every failure down the retry path and the
+// classification under test would never run.
 jest.mock("../src/api", () => ({
   ...jest.requireActual("../src/api"),
   api: {

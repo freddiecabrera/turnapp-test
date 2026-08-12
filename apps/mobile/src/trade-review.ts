@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { giveAndGet } from "./components/TradeCards";
+import { giveAndGet } from "./trade";
 import type { CardWithOwnership, Trade } from "./types";
 
 /**
@@ -102,14 +102,19 @@ export function brokenSide(ownership: Ownership | null): BrokenSide {
 export type Recheck = { ok: true; trade: Trade | null } | { ok: false };
 
 /**
- * What a refused answer can offer next.
+ * What a refused *answer* can offer next.
  *
  * - `decline` — the trade is still pending and declining it is guaranteed to
  *   work. The single most valuable affordance on the screen.
  * - `board` — nothing on this screen can move this trade any further.
  * - `retry` — the same request could succeed on a second attempt.
+ *
+ * Not to be confused with `SendRecovery` in `./wizard`, which classifies a
+ * refused *send*. They share two of three members and neither is a subset of
+ * the other: this one can offer a decline, which is meaningless before a trade
+ * exists, and that one can offer a re-pick, which is meaningless once one does.
  */
-export type Recovery = "decline" | "board" | "retry";
+export type AnswerRecovery = "decline" | "board" | "retry";
 
 /**
  * Choose the recovery for a refused answer, from the status code and a fresh
@@ -141,7 +146,11 @@ export type Recovery = "decline" | "board" | "retry";
  * 404 are unreachable from a board that only pushes trades the viewer received,
  * so they share it rather than earning wording of their own.
  */
-export function recoveryFor(error: unknown, answer: Answer, recheck: Recheck): Recovery {
+export function answerRecoveryFor(
+  error: unknown,
+  answer: Answer,
+  recheck: Recheck
+): AnswerRecovery {
   const status = error instanceof ApiError ? error.status : null;
   if (status !== 409) return "retry";
 

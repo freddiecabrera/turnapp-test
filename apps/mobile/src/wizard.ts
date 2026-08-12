@@ -129,17 +129,49 @@ export function reconcileRequested(partnerIds: ReadonlySet<string>): void {
 }
 
 /**
- * The string to show for a failure, given the copy to fall back on.
- *
- * An `ApiError`'s message is a sentence the server wrote for a human and is
- * rendered verbatim — the routes answer `{ error }` and those strings are
- * user-facing copy (AGENTS.md, "Conventions"). Anything else is a rejected
- * fetch whose message is a diagnostic ("Network request failed", a URL, a
- * native stack) and must never reach a screen, so it becomes copy instead.
- *
- * The same distinction `TradingBoard` makes, lifted out because four screens
- * now need it and each one has a different sentence to fall back on.
+ * Re-exported so each wizard step keeps one import for the draft and the
+ * failure string it renders beside it. The rule itself lives next to
+ * `ApiError`, which is the class it tests.
  */
-export function messageFor(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
+export { messageFor } from "./api";
+
+/**
+ * Which way out to offer for a failed send.
+ *
+ * `POST /trades` documents thirteen refusals. They collapse into three
+ * recoveries, because a person does not need thirteen answers — they need to
+ * know whether to change something, go look at something, or stop:
+ *
+ * - **`board`** — 409, the only one. This exact offer already exists and is
+ *   pending, so the thing to do is go and look at it.
+ * - **`repick`** — every 400 and 404 that survives to here. Something chosen
+ *   earlier stopped being true: a card one side no longer owns, a person who no
+ *   longer exists. All three "change what you picked" buttons are offered, and
+ *   the server's own sentence above them says which one to press.
+ * - **`retry`** — a 500, or a rejected fetch that never reached the server.
+ *   Nothing to change; the same request may simply work.
+ *
+ * The third documented recovery — you cannot do this at all — is the two staff
+ * refusals, and neither survives to here. The sender-is-staff case is caught at
+ * step 1 from the token, before four steps of work; the recipient-is-staff case
+ * cannot be composed, because search excludes staff from the results this
+ * partner was chosen from. If one ever did arrive it lands in `repick`, whose
+ * "choose someone else" is the correct move for it anyway.
+ *
+ * Not to be confused with `AnswerRecovery` in `./trade-review`, which
+ * classifies a refused *answer* to a trade that already exists. Two of the
+ * three members coincide and the third does not, in both directions.
+ */
+export type SendRecovery = "board" | "repick" | "retry";
+
+/**
+ * Deliberately switching on `status`, never on the message. Those sentences are
+ * the server's to reword; a client that branches on their text breaks silently
+ * the first time one is improved.
+ */
+export function sendRecoveryFor(error: unknown): SendRecovery {
+  if (!(error instanceof ApiError)) return "retry";
+  if (error.status === 409) return "board";
+  if (error.status === 400 || error.status === 404) return "repick";
+  return "retry";
 }

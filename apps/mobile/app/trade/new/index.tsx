@@ -90,9 +90,14 @@ export default function ChoosePartner() {
     }
 
     const id = ++runId.current;
-    setSearching(true);
 
     const timer = setTimeout(() => {
+      // Set here rather than before the timer: `searching` is read as "a
+      // request is in flight", and during the debounce window there is not one
+      // yet. Setting it early spun the spinner over nothing and, because the
+      // clear button is drawn on `!searching`, took that button away on the
+      // first keystroke and gave it back only when the search resolved.
+      setSearching(true);
       api
         .searchUsers(q)
         .then((found) => {
@@ -132,6 +137,83 @@ export default function ChoosePartner() {
   const searched = query.trim() !== "";
   const truncated = results !== null && results.length >= SEARCH_LIMIT;
 
+  const body = () => {
+    if (!searched) {
+      // Idle. Nothing has been asked, so nothing has failed.
+      return <WizardNotice icon="search-outline" title={copy.wizard.partner.prompt} />;
+    }
+
+    if (searching && results === null) {
+      return (
+        <View style={styles.centered}>
+          <ActivityIndicator color={colors.black} />
+        </View>
+      );
+    }
+
+    if (error !== null) {
+      return (
+        <WizardNotice
+          icon="cloud-offline-outline"
+          title={copy.wizard.partner.errorTitle}
+          body={error}
+        >
+          <PrimaryButton label={copy.wizard.retry} onPress={() => setAttempt((a) => a + 1)} />
+        </WizardNotice>
+      );
+    }
+
+    if (results !== null && results.length === 0) {
+      return (
+        <WizardNotice
+          icon="person-outline"
+          title={copy.wizard.partner.empty}
+          hint={copy.wizard.partner.emptyHint}
+        />
+      );
+    }
+
+    return (
+      <FlatList
+        data={results ?? []}
+        keyExtractor={(u) => u.id}
+        contentContainerStyle={styles.list}
+        keyboardShouldPersistTaps="handled"
+        ListFooterComponent={
+          truncated ? (
+            <Text style={styles.capped}>
+              {fill(copy.wizard.partner.capped, { count: results?.length ?? 0 })}
+            </Text>
+          ) : null
+        }
+        renderItem={({ item }) => (
+          <Pressable
+            accessibilityRole="button"
+            onPress={() => {
+              choosePartner(item);
+              router.push("/trade/new/offer");
+            }}
+            style={({ pressed }) => [
+              styles.row,
+              draft.partner?.id === item.id && styles.rowChosen,
+              pressed && styles.pressed,
+            ]}
+          >
+            <View style={styles.rowText}>
+              <Text style={styles.username} numberOfLines={1}>
+                @{item.username}
+              </Text>
+              <Text style={styles.userId}>
+                {fill(copy.wizard.partner.idFormat, { id: item.userIdNumber })}
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={colors.black} />
+          </Pressable>
+        )}
+      />
+    );
+  };
+
   return (
     <WizardScreen step={1} title={copy.wizard.partner.title}>
       <View style={styles.searchRow}>
@@ -157,66 +239,7 @@ export default function ChoosePartner() {
         )}
       </View>
 
-      {!searched ? (
-        // Idle. Nothing has been asked, so nothing has failed.
-        <WizardNotice icon="search-outline" title={copy.wizard.partner.prompt} />
-      ) : searching && results === null ? (
-        <View style={styles.centered}>
-          <ActivityIndicator color={colors.black} />
-        </View>
-      ) : error !== null ? (
-        <WizardNotice
-          icon="cloud-offline-outline"
-          title={copy.wizard.partner.errorTitle}
-          body={error}
-        >
-          <PrimaryButton label={copy.wizard.retry} onPress={() => setAttempt((a) => a + 1)} />
-        </WizardNotice>
-      ) : results !== null && results.length === 0 ? (
-        <WizardNotice
-          icon="person-outline"
-          title={copy.wizard.partner.empty}
-          hint={copy.wizard.partner.emptyHint}
-        />
-      ) : (
-        <FlatList
-          data={results ?? []}
-          keyExtractor={(u) => u.id}
-          contentContainerStyle={styles.list}
-          keyboardShouldPersistTaps="handled"
-          ListFooterComponent={
-            truncated ? (
-              <Text style={styles.capped}>
-                {fill(copy.wizard.partner.capped, { count: results?.length ?? 0 })}
-              </Text>
-            ) : null
-          }
-          renderItem={({ item }) => (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => {
-                choosePartner(item);
-                router.push("/trade/new/offer");
-              }}
-              style={({ pressed }) => [
-                styles.row,
-                draft.partner?.id === item.id && styles.rowChosen,
-                pressed && styles.pressed,
-              ]}
-            >
-              <View style={styles.rowText}>
-                <Text style={styles.username} numberOfLines={1}>
-                  @{item.username}
-                </Text>
-                <Text style={styles.userId}>
-                  {fill(copy.wizard.partner.idFormat, { id: item.userIdNumber })}
-                </Text>
-              </View>
-              <Ionicons name="chevron-forward" size={18} color={colors.black} />
-            </Pressable>
-          )}
-        />
-      )}
+      {body()}
     </WizardScreen>
   );
 }

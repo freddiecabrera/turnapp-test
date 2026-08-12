@@ -4,18 +4,25 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { PrimaryButton } from "../../src/components/PrimaryButton";
-import { TradeCards, giveAndGet } from "../../src/components/TradeCards";
-import { STATUS_KEY, isActionable } from "../../src/components/TradeRow";
+import { TradeCards } from "../../src/components/TradeCards";
 import {
+  giveAndGet,
+  isActionable,
+  isUnfulfillable,
+  partnerOf,
+  statusLine,
+  tradeDateLabel,
+} from "../../src/trade";
+import {
+  answerRecoveryFor,
   brokenSide,
   finishedTrade,
   ownershipOf,
-  recoveryFor,
   type Answer,
+  type AnswerRecovery,
   type Recheck,
-  type Recovery,
 } from "../../src/trade-review";
-import { ApiError, api } from "../../src/api";
+import { api, messageFor } from "../../src/api";
 import { copy, fill } from "../../src/copy";
 import { colors, fonts, radius } from "../../src/theme";
 import type { Card, CardWithOwnership, Trade } from "../../src/types";
@@ -62,20 +69,7 @@ type Phase =
   /** Answered — by this screen, or elsewhere and discovered by the re-read. */
   | { kind: "outcome" }
   /** An answer was refused. `recovery` decides what is offered next. */
-  | { kind: "failed"; answer: Answer; message: string; recovery: Recovery };
-
-/**
- * The string to show for a failure.
- *
- * An `ApiError` carries a sentence the server wrote for a human — every 403,
- * 404 and 409 on the trade routes is worded that way — and those are rendered
- * verbatim rather than remapped. Anything else is a rejected fetch whose
- * message is a diagnostic ("Network request failed", a URL, a native stack) and
- * must never reach the screen, so it becomes copy instead.
- */
-function messageFor(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
+  | { kind: "failed"; answer: Answer; message: string; recovery: AnswerRecovery };
 
 /** A card's name, or the placeholder `TradeCards` uses for the same gap. */
 function nameOf(card: Card): string {
@@ -182,7 +176,7 @@ export default function TradeReview() {
    * On a failure the board is re-read once, because the two things this screen
    * most needs to know are only answerable from the trade's own state: whether
    * it survived (a rolled-back accept is still PENDING and still declinable),
-   * and whether it had in fact already finished. See `recoveryFor` and
+   * and whether it had in fact already finished. See `answerRecoveryFor` and
    * `finishedTrade` for why that is a re-read rather than a match on the
    * server's wording.
    */
@@ -217,7 +211,7 @@ export default function TradeReview() {
           kind: "failed",
           answer: which,
           message: messageFor(e, copy.review.failed.body),
-          recovery: recoveryFor(e, which, recheck),
+          recovery: answerRecoveryFor(e, which, recheck),
         });
       } finally {
         setBusy(null);
@@ -377,7 +371,7 @@ export default function TradeReview() {
 
   // The other party, and the preposition that is true of the viewer's side.
   const sent = trade.direction === "sent";
-  const partner = sent ? trade.toUser : trade.fromUser;
+  const partner = partnerOf(trade);
 
   // Only the recipient can ever end a trade, and only while it is pending. Note
   // this is deliberately wider than `isActionable`: a trade the API says can no
@@ -390,11 +384,7 @@ export default function TradeReview() {
   // reused so the two surfaces cannot disagree about when accepting is possible.
   const canAccept = isActionable(trade);
 
-  // Strictly `false`. `fulfillable` is `boolean | null` and `null` means "not
-  // applicable" — the serializer forces it for every answered trade — so
-  // drawing the can't-complete treatment on falsiness would mark finished
-  // trades as broken ones.
-  const unfulfillable = trade.fulfillable === false;
+  const unfulfillable = isUnfulfillable(trade);
 
   const ownership = ownershipOf(trade, cards);
 
@@ -417,10 +407,7 @@ export default function TradeReview() {
       ? fill(copy.review.ownership.alreadyOwn, { count: ownership.getQuantity })
       : null;
 
-  // `createdAt`, matching the board row: the board sorts on it, so it is the
-  // date that makes a trade's position in the list read as deliberate.
-  const created = new Date(trade.createdAt);
-  const dateLabel = Number.isNaN(created.getTime()) ? "" : created.toLocaleDateString();
+  const dateLabel = tradeDateLabel(trade);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -471,9 +458,7 @@ export default function TradeReview() {
           // same row means opposite things to the two parties, and one set of
           // strings is what keeps the two surfaces saying the same thing.
           <View style={styles.actions}>
-            <Text style={styles.status}>
-              {copy.board.status[trade.direction][STATUS_KEY[trade.status]]}
-            </Text>
+            <Text style={styles.status}>{statusLine(trade)}</Text>
             {sent && trade.status === "PENDING" && (
               <Text style={styles.hint}>{copy.board.sentInert}</Text>
             )}

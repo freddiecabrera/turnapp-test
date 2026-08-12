@@ -3,7 +3,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { rarityColor } from "./CardTile";
 import { copy } from "../copy";
 import { colors, fonts, radius } from "../theme";
+import { giveAndGet, type TradeDirection } from "../trade";
 import type { Card } from "../types";
+
+/**
+ * Re-exported from `../trade`, where the inversion lives now that a module with
+ * no React in it needs it too. Both names read as this component's from every
+ * surface that draws a trade, and moving the definition is no reason to make
+ * its importers move with it.
+ */
+export { giveAndGet, type TradeDirection } from "../trade";
 
 /**
  * The two cards in a trade, labelled from the viewer's side.
@@ -23,31 +32,6 @@ import type { Card } from "../types";
  * "requested card": that word is wrong for half the users, and the give/get
  * pair in `copy.ts` is right for both.
  */
-export type TradeDirection = "sent" | "received";
-
-/**
- * Which card the viewer loses and which they gain.
- *
- * Exported because it is the one piece of trade logic that is easy to get
- * backwards and every trading surface needs it — a confirmation sentence naming
- * the two cards has to agree with the thumbnails above it, and re-deriving the
- * inversion at each call site is how the two drift apart.
- *
- * `sent`: the viewer offered `offeredCard` and asked for `requestedCard`.
- * `received`: the inverse — the sender's `offeredCard` is what the viewer
- * *gains*, and the `requestedCard` they named is the viewer's own, so it is
- * what the viewer *gives*.
- */
-export function giveAndGet(
-  direction: TradeDirection,
-  offeredCard: Card,
-  requestedCard: Card
-): { give: Card; get: Card } {
-  return direction === "sent"
-    ? { give: offeredCard, get: requestedCard }
-    : { give: requestedCard, get: offeredCard };
-}
-
 export function TradeCards({
   direction,
   offeredCard,
