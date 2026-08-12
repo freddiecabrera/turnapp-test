@@ -4,6 +4,7 @@ import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
 import { toPublicTrade } from "../serialize";
+import { hasNullByte } from "../validation";
 
 /**
  * Trading: the board, and the three things a person can do to a trade.
@@ -70,6 +71,43 @@ const ALREADY_ANSWERED = "This trade has already been answered. Refresh to see h
 const TRADE_NOT_FOUND = "We couldn't find that trade.";
 
 /**
+ * An id that cannot name a trade because Postgres will not hold it, shared by
+ * accept and decline.
+ *
+ * Deliberately a 400 rather than the 404 next to it. A 404 is an answer about
+ * the table — we looked, nothing matched — and this route never gets to look:
+ * `hasNullByte` refuses the string before a query is built, so claiming the
+ * trade does not exist would be reporting a lookup that never happened.
+ */
+const INVALID_TRADE_ID = "That isn't a valid trade id.";
+
+/**
+ * A trade has two collector accounts on it, and staff accounts are not
+ * collectors. One rule, and a sentence for whichever side of it the caller is
+ * standing on.
+ *
+ * `GET /users/search` has always filtered admins out with the comment "admins
+ * are staff accounts, not trading partners", but `POST /trades` accepted an
+ * admin id and answered 201 — so the rule held exactly where the wizard happens
+ * to look and nowhere else, and anyone who knew an id walked straight past it.
+ * A filter that a second endpoint contradicts is a UI convenience being
+ * mistaken for a rule. This makes it the rule.
+ *
+ * Both directions, because "not a trading partner" is symmetric: a staff
+ * account offering a card to a collector puts staff on that collector's board
+ * just as surely as one receiving an offer does, and half a rule is the thing
+ * being fixed here.
+ *
+ * Enforced at creation only. Accept and decline deliberately don't re-check —
+ * a trade that predates this rule, or one written directly to the table, must
+ * still be answerable, and refusing there would strand a row on somebody's
+ * board with no way to clear it. Same reasoning as decline not re-checking
+ * ownership. See DESIGN.md, "Edge cases and where they're caught".
+ */
+const STAFF_CANNOT_SEND = "Staff accounts can't send trades.";
+const STAFF_CANNOT_RECEIVE = "You can't trade with a staff account.";
+
+/**
  * Everything `toPublicTrade` needs, and nothing it doesn't.
  *
  * Top-level `include` for the trade's own columns, nested `select` for the two
@@ -111,9 +149,22 @@ class TradeError extends Error {
  * being coerced into a lookup — `String(null)` is `"null"`, which is a
  * perfectly valid thing to go looking for and a terrible thing to go looking
  * for. Trimming matches how `POST /scan` reads its code.
+ *
+ * A string carrying a null byte is refused here too, and this is the reason the
+ * check is inside `readId` rather than beside each field: `.trim()` does not
+ * remove `\0` — it is not whitespace — so a well-formed cuid with one appended
+ * survived every check above and only failed at Postgres, as a 500. One choke
+ * point every id already passes through cannot be forgotten a field at a time,
+ * the way three separate guards can. See `../validation`.
+ *
+ * The caller's own "this field is missing" copy then covers it. That is not a
+ * loss of detail: no client sends a null byte by accident, and both answers
+ * mean the same thing to the person reading them — the id you gave me is not
+ * usable, choose again.
  */
 function readId(value: unknown): string | null {
   if (typeof value !== "string") return null;
+  if (hasNullByte(value)) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
 }
@@ -324,6 +375,15 @@ tradesRouter.post("/", async (req, res) => {
     return res.status(400).json({ error: "You can't trade with yourself." });
   }
 
+  // Staff accounts are not trading partners — see the note above
+  // `STAFF_CANNOT_SEND`. Read from the token because that is already how staff
+  // is decided everywhere else: `requireAdmin` gates the entire admin router on
+  // this same claim, so a second source of truth for it here would be the
+  // novelty, not the safeguard.
+  if (req.auth!.isAdmin) {
+    return res.status(400).json({ error: STAFF_CANNOT_SEND });
+  }
+
   if (offeredCardId === requestedCardId) {
     return res
       .status(400)
@@ -336,10 +396,16 @@ tradesRouter.post("/", async (req, res) => {
     // memory where a log line or an error dump can reach them.
     const recipient = await prisma.user.findUnique({
       where: { id: toUserId },
-      select: { id: true },
+      select: { id: true, isAdmin: true },
     });
     if (!recipient) {
       return res.status(404).json({ error: "We couldn't find that person." });
+    }
+
+    // 400 rather than 404. The account exists and the caller may well have a
+    // legitimate reason to know it does; what's wrong is the trade, not the id.
+    if (recipient.isAdmin) {
+      return res.status(400).json({ error: STAFF_CANNOT_RECEIVE });
     }
 
     // One round trip for both cards; the messages still name which one is
@@ -380,9 +446,19 @@ tradesRouter.post("/", async (req, res) => {
       include: TRADE_WITH_PARTIES,
     });
 
-    // `true`, not `null`. Both ownership checks just passed, so this trade is
-    // fulfillable as of right now — and `null` means "not applicable", which
-    // clients read as an already-answered trade.
+    // `true`, not `null`. Both ownership checks passed, which is the strongest
+    // thing this endpoint can say — and not quite "as of right now": the two
+    // reads and this insert are three statements in three implicit
+    // transactions, nothing holds a lock across them, and an accept elsewhere
+    // draining the last copy in that window makes this `true` where the next
+    // board read says `false`.
+    //
+    // That is the derived value behaving as designed rather than a gap to
+    // close. `GET /trades` recomputes it on every request so a stale `true`
+    // corrects itself the moment anyone looks, and nothing rests on it being
+    // fresh: accept re-verifies ownership atomically and refuses regardless of
+    // what this said. `null` is not the safer answer either — it means "not
+    // applicable", which clients read as an already-answered trade.
     const dto: Trade = toPublicTrade(created, fromUserId, true);
     return res.status(201).json(dto);
   } catch (e) {
@@ -482,6 +558,14 @@ async function moveCard(
  */
 tradesRouter.post("/:id/accept", async (req, res) => {
   const viewerId = req.auth!.userId;
+
+  // A path segment reaches Postgres exactly as a body value does, and this one
+  // skips `readId` entirely — so it needs its own guard. No trade id we issue
+  // contains a null byte, which makes this never a real lookup, only a 500 we
+  // can decline to produce. See `../validation`.
+  if (hasNullByte(req.params.id)) {
+    return res.status(400).json({ error: INVALID_TRADE_ID });
+  }
 
   // Only the columns the decision needs. `include`-ing the parties here would
   // pull two `User` rows — emails and hashes included — for a request that may
@@ -595,6 +679,12 @@ tradesRouter.post("/:id/accept", async (req, res) => {
  */
 tradesRouter.post("/:id/decline", async (req, res) => {
   const viewerId = req.auth!.userId;
+
+  // Same guard as accept, for the same reason: `:id` never passes through
+  // `readId`, and a null byte in it is refused by Postgres rather than answered.
+  if (hasNullByte(req.params.id)) {
+    return res.status(400).json({ error: INVALID_TRADE_ID });
+  }
 
   // Only the columns the decision needs. `include`-ing the parties here would
   // pull two `User` rows — emails and hashes included — for a request that may

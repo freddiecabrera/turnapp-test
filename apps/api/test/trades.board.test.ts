@@ -76,6 +76,7 @@ function pick(trades: Trade[], id: string): Trade {
 }
 
 async function pendingTrade(opts: {
+  id?: string;
   fromUserId: string;
   toUserId: string;
   offeredCardId: string;
@@ -301,6 +302,64 @@ describe("GET /trades", () => {
       expect((await authedApi(bob, "post", `/trades/${older.id}/decline`)).status).toBe(200);
 
       expect((await boardOf(alice)).map((t) => t.id)).toEqual([newer.id, older.id]);
+    });
+
+    /**
+     * The second sort key, which the two cases above cannot reach.
+     *
+     * Both of them place their trades a day apart, so `createdAt desc` decides
+     * everything and `{ id: "desc" }` could be deleted without either noticing.
+     * Ties are not the corner case that makes it worth having, either:
+     * `createdAt` is `TIMESTAMP(3)` defaulting to `CURRENT_TIMESTAMP`, which is
+     * *transaction start* truncated to the millisecond — inserting 120 trades
+     * concurrently put 104 of them in one millisecond bucket. Without a
+     * tiebreaker the order inside a bucket is whatever the plan produced, and
+     * two identical requests can come back reshuffled, which is exactly what
+     * the route's comment says the key is there to stop.
+     *
+     * The ids are written rather than generated, and the insertion order
+     * deliberately disagrees with `id desc`. A cuid is random, so asserting
+     * against generated ids would be asserting against a coin flip: the plan
+     * for four rows returns them in physical order, which is insertion order,
+     * which would match the expected order about one run in twenty-four.
+     */
+    it("breaks a createdAt tie by id, descending", async () => {
+      const { alice, bob, common, aliceOnly, bobOnly, dupe } = await twoTraders();
+      // One timestamp, shared byte for byte, so the first key cannot separate
+      // any of these.
+      const tied = new Date("2026-03-02T00:00:00.000Z");
+
+      const written = [
+        { id: "t2", offeredCardId: aliceOnly.id, requestedCardId: bobOnly.id },
+        { id: "t4", offeredCardId: aliceOnly.id, requestedCardId: common.id },
+        { id: "t1", offeredCardId: common.id, requestedCardId: bobOnly.id },
+        { id: "t3", offeredCardId: dupe.id, requestedCardId: common.id },
+      ];
+      for (const row of written) {
+        await pendingTrade({
+          ...row,
+          fromUserId: alice.id,
+          toUserId: bob.id,
+          createdAt: tied,
+        });
+      }
+
+      const board = await boardOf(alice);
+
+      // The premise, asserted rather than assumed: if these ever stopped tying,
+      // the first key would be doing the sorting and this test would be
+      // measuring nothing.
+      expect(new Set(board.map((t) => t.createdAt)).size).toBe(1);
+
+      expect(board.map((t) => t.id)).toEqual(["t4", "t3", "t2", "t1"]);
+      // Not the order they were written in — dropping the tiebreaker returns
+      // that instead.
+      expect(board.map((t) => t.id)).not.toEqual(written.map((r) => r.id));
+
+      // Total, not merely deterministic-looking: the same request twice, and
+      // the other party's view of the same rows, all agree.
+      expect((await boardOf(alice)).map((t) => t.id)).toEqual(["t4", "t3", "t2", "t1"]);
+      expect((await boardOf(bob)).map((t) => t.id)).toEqual(["t4", "t3", "t2", "t1"]);
     });
   });
 

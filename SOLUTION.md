@@ -9,7 +9,7 @@ decided along the way.
 ## What was built
 
 Card trading down to the database: a `Trade` model with its migration, six endpoints behind
-`requireAuth`, the shared DTOs, and 151 tests.
+`requireAuth`, the shared DTOs, and 161 tests.
 
 | Method | Path | Purpose |
 | --- | --- | --- |
@@ -44,7 +44,7 @@ npm run api:setup                   # docker postgres + prisma generate + migrat
 One command is the whole gate:
 
 ```bash
-npm run verify   # api typecheck + mobile typecheck + admin build + 151 tests
+npm run verify   # api typecheck + mobile typecheck + admin build + 161 tests
 ```
 
 The tests are integration tests against real Postgres, over HTTP with supertest, on a

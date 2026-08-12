@@ -208,6 +208,21 @@ describe("POST /trades", () => {
       expect(await prisma.trade.count()).toBe(0);
     });
 
+    /**
+     * The duplicate check keys on four columns, and each of them has to be in
+     * the key or the endpoint refuses trades that are legal.
+     *
+     * The case below this comment varies `offeredCardId`, and for a long time
+     * it was the only one: dropping any of the other three from the `findFirst`
+     * left the whole suite green while `POST /trades` started answering 409 to
+     * offers DESIGN.md describes as valid. Each of the next three varies
+     * exactly one column and holds everything else identical, so it fails if
+     * and only if that column leaves the key.
+     *
+     * They go through the endpoint rather than `prisma.trade.create`, which is
+     * what makes them cover the handler's check — the board and accept suites
+     * seed rows directly, so the `findFirst` never sees those at all.
+     */
     it("allows a second, different offer to the same person", async () => {
       const { alice, bob, aliceOnly, bobOnly, dupe } = await twoTraders();
 
@@ -223,6 +238,73 @@ describe("POST /trades", () => {
       });
 
       expect([first.status, second.status]).toEqual([201, 201]);
+      expect(await prisma.trade.count()).toBe(2);
+    });
+
+    it("allows the same card to be offered for two different cards", async () => {
+      const { alice, bob, common, aliceOnly, bobOnly } = await twoTraders();
+
+      // Same sender, same recipient, same offered card — only the card being
+      // asked for differs, and bob owns both of them. Two distinct offers:
+      // "my aliceOnly for your bobOnly" and "my aliceOnly for your common".
+      const first = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const second = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect([first.status, second.status]).toEqual([201, 201]);
+      expect(await prisma.trade.count()).toBe(2);
+    });
+
+    it("allows the same offer to be made to two different people", async () => {
+      const { alice, bob, common, aliceOnly } = await twoTraders();
+      const carol = await createUser("carol");
+      await grant(carol.id, common.id);
+
+      // DESIGN.md's "offering one copy to four people": legal at creation, and
+      // a race only the accept guard is entitled to settle. Refusing the second
+      // one here would decide it in the wrong place.
+      const toBob = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+      const toCarol = await post(alice, {
+        toUserId: carol.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect([toBob.status, toCarol.status]).toEqual([201, 201]);
+      expect(await prisma.trade.count()).toBe(2);
+    });
+
+    it("allows two different people to make the same offer", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const dave = await createUser("dave");
+      await grant(dave.id, aliceOnly.id);
+
+      // Byte-identical offers apart from who is sending them. Bob now has two
+      // people asking for his bobOnly and offering the same card for it, which
+      // is the whole point of a trading board.
+      const fromAlice = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const fromDave = await post(dave, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+
+      expect([fromAlice.status, fromDave.status]).toEqual([201, 201]);
       expect(await prisma.trade.count()).toBe(2);
     });
 
@@ -302,6 +384,50 @@ describe("POST /trades", () => {
       }
 
       expect(await prisma.trade.count()).toBe(0);
+    });
+
+    /**
+     * Postgres refuses `0x00` inside a `text` value — `22021` — so an id
+     * carrying one cannot be looked up, only declined. Unguarded it reached the
+     * driver and came back as a 500, while `GET /users/search` and
+     * `GET /users/:id/cards` answered 400 to the same byte.
+     *
+     * The trailing case is the one that explains why it slipped through: every
+     * id here is trimmed, and `.trim()` does not remove `\0` — it is not
+     * whitespace — so a perfectly well-formed cuid with one appended passed
+     * every check in the handler and failed at the database.
+     */
+    it("rejects a null byte in any of the three ids rather than 500ing", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const full = {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      };
+
+      const cases: Array<[keyof typeof full, string]> = [
+        ["toUserId", "Choose someone to trade with."],
+        ["offeredCardId", "Choose one of your cards to offer."],
+        ["requestedCardId", "Choose a card to ask for."],
+      ];
+
+      for (const [field, error] of cases) {
+        const res = await post(alice, { ...full, [field]: "aa\u0000bb" });
+        expect(res.status, field).toBe(400);
+        expect(res.body, field).toEqual({ error });
+      }
+
+      const trailing = await post(alice, { ...full, toUserId: `${bob.id}\u0000` });
+      expect(trailing.status).toBe(400);
+      expect(trailing.body).toEqual({ error: "Choose someone to trade with." });
+
+      expect(await prisma.trade.count()).toBe(0);
+
+      // Refused at the edge means nothing reached the driver, and the request
+      // that shows it is the next one: the same route still works, and the
+      // process is still here to answer it.
+      const after = await post(alice, full);
+      expect(after.status).toBe(201);
     });
   });
 
@@ -402,6 +528,89 @@ describe("POST /trades", () => {
 
       expect(res.status).toBe(400);
       expect(res.body).toEqual({ error: "They don't have the card you asked for." });
+    });
+  });
+
+  /**
+   * `GET /users/search` filters admins out because "admins are staff accounts,
+   * not trading partners". That sentence is either a rule or a UI convenience,
+   * and it used to be both at once: search hid them, and `POST /trades` took an
+   * admin id and answered 201. These cases pin the resolution — it is a rule,
+   * on both sides of the trade, at the endpoint that creates one.
+   *
+   * Each fixture gives the staff account the card in question, so the staff rule
+   * is the only thing that can produce the 400. Without that, "they don't have
+   * the card you asked for" would answer these identically and the test would go
+   * green against no rule at all.
+   */
+  describe("400 — staff accounts are not trading partners", () => {
+    it("refuses an offer addressed to a staff account", async () => {
+      const { alice, aliceOnly, common } = await twoTraders();
+      const staff = await createUser("staffer", { isAdmin: true });
+      await grant(staff.id, common.id);
+
+      const res = await post(alice, {
+        toUserId: staff.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "You can't trade with a staff account." });
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("refuses an offer sent by a staff account", async () => {
+      const { bob, bobOnly, common } = await twoTraders();
+      const staff = await createUser("staffer", { isAdmin: true });
+      await grant(staff.id, common.id);
+
+      // The mirror of the case above, and the half a target-only check would
+      // miss: staff on a collector's board either way.
+      const res = await post(staff, {
+        toUserId: bob.id,
+        offeredCardId: common.id,
+        requestedCardId: bobOnly.id,
+      });
+
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "Staff accounts can't send trades." });
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("agrees with the partner search that never offers them", async () => {
+      const { alice, aliceOnly, common } = await twoTraders();
+      const staff = await createUser("staffer", { isAdmin: true });
+      await grant(staff.id, common.id);
+
+      // Step 1 of the wizard cannot produce this account…
+      const search = await authedApi(alice, "get", "/users/search?q=staffer");
+      expect(search.status).toBe(200);
+      expect(search.body).toEqual([]);
+
+      // …and neither can already knowing the id, which was the hole. One rule,
+      // two endpoints, same answer.
+      const res = await post(alice, {
+        toUserId: staff.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: common.id,
+      });
+      expect(res.status).toBe(400);
+      expect(await prisma.trade.count()).toBe(0);
+    });
+
+    it("still lets two collectors trade", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      await createUser("staffer", { isAdmin: true });
+
+      // The rule is about who is on the trade, not about an admin existing.
+      const res = await post(alice, {
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+
+      expect(res.status).toBe(201);
     });
   });
 
@@ -578,6 +787,73 @@ describe("POST /trades", () => {
       expect(await prisma.trade.count()).toBe(1);
       expect(await totalCopiesEverywhere()).toBe(before);
     });
+  });
+
+  /**
+   * The other half of that catch: what it says when the failure is *not* one it
+   * recognises.
+   *
+   * `app.ts`'s error middleware argues at length for a fixed sentence and never
+   * `err.message`, because a rejected Prisma query stringifies to the failing
+   * call and an absolute path into the source tree. This handler answers its own
+   * 500 rather than rethrowing, so that argument has to hold here too — and
+   * until this case existed, nothing checked that it did. A handler returning
+   * `String(e.message)`, or a 200 with an empty body, passed the whole suite.
+   *
+   * Reaching it needs a real database failure that is not `P2002`, which the
+   * five checks above are quite good at preventing. A foreign key is the way in:
+   * the recipient is deleted in a transaction that stays open, so every read the
+   * handler makes still sees him — READ COMMITTED shows it the committed row —
+   * and the first statement that has to take a lock on `User` is the INSERT's own
+   * foreign-key check. It parks there until the delete commits, then fails with
+   * `P2003` on a row that no longer exists.
+   *
+   * Same machinery as the P2002 case above, and the same reason for it: polling
+   * for the blocked backend asserts the handler reached the insert, rather than
+   * sleeping and hoping.
+   */
+  describe("500 — a failure the handler didn't plan for", () => {
+    it("answers the fixed sentence, never the database's message", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+
+      const holdingOpen = prisma.$transaction(
+        async (tx) => {
+          // Uncommitted. Cascades take his UserCard rows with him, so this also
+          // proves the ownership reads saw the pre-delete snapshot: had they
+          // seen the delete, the request would have 400d long before the insert.
+          await tx.user.delete({ where: { id: bob.id } });
+
+          const inflight = inFlight(
+            post(alice, {
+              toUserId: bob.id,
+              offeredCardId: aliceOnly.id,
+              requestedCardId: bobOnly.id,
+            })
+          );
+          await waitForLockWaiters(1);
+          return { inflight };
+        },
+        { timeout: 20000, maxWait: 10000 }
+      );
+
+      const res = await (await holdingOpen).inflight;
+
+      expect(res.status).toBe(500);
+      expect(res.body).toEqual({ error: "Something went wrong sending that offer." });
+      // Nothing derived from the error. A Prisma message carries the failing
+      // query, the absolute path of the file that ran it, and the lines around
+      // it — none of which a client is entitled to.
+      expect(res.text).not.toContain("prisma.");
+      expect(res.text).not.toContain("/Users/");
+      expect(res.text).not.toContain("Invalid `");
+      expect(res.text).not.toContain("Foreign key");
+
+      // The insert is the statement that failed, so nothing may have landed.
+      expect(await prisma.trade.count()).toBe(0);
+
+      const health = await api().get("/health");
+      expect(health.status).toBe(200);
+    }, 20_000);
   });
 
   /**

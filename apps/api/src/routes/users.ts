@@ -3,6 +3,7 @@ import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
 import { requireAuth } from "../auth";
 import { toPublicCard, toUserSummary } from "../serialize";
+import { hasNullByte } from "../validation";
 
 /**
  * Partner discovery: the two reads the create-trade flow needs before it can
@@ -26,20 +27,6 @@ const MAX_INT4 = 2147483647;
 
 /** The columns a user is allowed to see of another user. */
 const SUMMARY_SELECT = { id: true, username: true, userIdNumber: true } as const;
-
-/**
- * Postgres rejects a null byte inside a `text` value outright — `22021 invalid
- * byte sequence for encoding "UTF8": 0x00` — so a string carrying one cannot be
- * queried with, only refused.
- *
- * The async boundary in `../async-router` already stops that rejection from
- * killing the process, but a 500 is the wrong answer to input we can classify
- * before touching the database. Refuse it at the edge and the 500 stays what it
- * should be: a bug we didn't anticipate.
- */
-function hasNullByte(value: string): boolean {
-  return value.includes("\0");
-}
 
 /**
  * Escape the characters `LIKE` treats as wildcards, so `q` matches literally.

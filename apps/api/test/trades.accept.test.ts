@@ -761,7 +761,14 @@ describe("POST /trades/:id/accept", () => {
       // because nothing a human did to it.
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
       expect(await prisma.trade.count({ where: { status: "PENDING" } })).toBe(1);
-    });
+      // An explicit budget, like every other concurrency case in this file, and
+      // for a sharper reason: on the deadlock path this test's duration is set
+      // by Postgres's `deadlock_timeout`, not by anything it does. That defaults
+      // to 1s — measured here at 1060–1079ms over eight runs, deadlocking 8/8 —
+      // which sits just inside vitest's 5s default and outside it on any server
+      // where the setting has been raised. Bounding it explicitly keeps a
+      // database configuration change from failing a test about trade logic.
+    }, 20_000);
   });
 
   /**
@@ -889,25 +896,52 @@ describe("POST /trades/:id/accept", () => {
     });
   });
 
-  describe("the async boundary", () => {
-    it("turns a rejected query into a JSON 500 and keeps serving", async () => {
-      const { bob } = await twoTraders();
+  /**
+   * A null byte is refused by Postgres inside a `text` value — `22021` —
+   * whatever the query around it, so an id carrying one can only be declined.
+   * This used to be the router's async-boundary case: unguarded, the rejection
+   * reached the driver and came back as the error middleware's 500, which on a
+   * plain `express.Router()` would instead have been an unhandled rejection and
+   * a dead process.
+   *
+   * The guard moves the answer forward to where the input is classified, so the
+   * assertion is now a 400 — matching `GET /users/:id/cards`, which has always
+   * answered 400 to the same byte in the same position. The boundary itself is
+   * unchanged and still covered, in `async-boundary.test.ts`.
+   *
+   * The health check stays. A refusal at the edge and a crash are told apart by
+   * the next request, not by this one.
+   */
+  describe("a null byte in the id", () => {
+    it("is refused with a 400 rather than reaching Postgres", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const trade = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
 
-      // A null byte is refused by Postgres inside a `text` value — `22021` —
-      // whatever the query around it. On a plain express.Router() that
-      // rejection is unhandled and Node 20 exits, taking the API down for
-      // everybody; here it has to come back as a 500.
       const res = await accept(bob, "a%00b");
 
-      expect(res.status).toBe(500);
-      expect(typeof (res.body as { error?: unknown }).error).toBe("string");
-      // Nothing derived from the error: a Prisma message carries the failing
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "That isn't a valid trade id." });
+      // Nothing derived from an error: a Prisma message carries the failing
       // query and an absolute path into the source tree.
       expect(res.text).not.toContain("prisma.");
       expect(res.text).not.toContain("/Users/");
 
+      // Refusing the id must not have touched the trade it doesn't name.
+      expect((await prisma.trade.findUniqueOrThrow({ where: { id: trade.id } })).status).toBe(
+        "PENDING"
+      );
+
       const health = await api().get("/health");
       expect(health.status).toBe(200);
+
+      // And a real id still works, so the guard rejects the byte rather than
+      // the route.
+      expect((await accept(bob, trade.id)).status).toBe(200);
     });
   });
 });

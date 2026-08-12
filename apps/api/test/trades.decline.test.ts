@@ -590,25 +590,48 @@ describe("POST /trades/:id/decline", () => {
     });
   });
 
-  describe("the async boundary", () => {
-    it("turns a rejected query into a JSON 500 and keeps serving", async () => {
-      const { bob } = await twoTraders();
+  /**
+   * The same guard as accept's, on the same path segment, for the same reason:
+   * Postgres refuses `0x00` inside a `text` value (`22021`), so an id carrying
+   * one can only be declined, never looked up. This was the router's
+   * async-boundary case until the guard answered it a step earlier; the
+   * boundary itself is unchanged and still covered in `async-boundary.test.ts`.
+   *
+   * Decline gets its own copy of the case rather than trusting accept's. The
+   * two handlers are separate functions with separate parameter reads, and the
+   * whole finding was one router carrying a guard its neighbour didn't.
+   */
+  describe("a null byte in the id", () => {
+    it("is refused with a 400 rather than reaching Postgres", async () => {
+      const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
+      const trade = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const before = await totalCopiesEverywhere();
 
-      // A null byte is refused by Postgres inside a `text` value — `22021` —
-      // whatever the query around it. On a plain express.Router() that
-      // rejection is unhandled and Node 20 exits, taking the API down for
-      // everybody; here it has to come back as a 500.
       const res = await decline(bob, "a%00b");
 
-      expect(res.status).toBe(500);
-      expect(typeof (res.body as { error?: unknown }).error).toBe("string");
-      // Nothing derived from the error: a Prisma message carries the failing
+      expect(res.status).toBe(400);
+      expect(res.body).toEqual({ error: "That isn't a valid trade id." });
+      // Nothing derived from an error: a Prisma message carries the failing
       // query and an absolute path into the source tree.
       expect(res.text).not.toContain("prisma.");
       expect(res.text).not.toContain("/Users/");
 
+      // Refusing the id must not have touched the trade it doesn't name, and
+      // decline never moves a card in any case.
+      expect((await storedTrade(trade.id)).status).toBe("PENDING");
+      expect(await totalCopiesEverywhere()).toBe(before);
+
       const health = await api().get("/health");
       expect(health.status).toBe(200);
+
+      // And a real id still works, so the guard rejects the byte rather than
+      // the route.
+      expect((await decline(bob, trade.id)).status).toBe(200);
     });
   });
 });
