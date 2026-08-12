@@ -104,6 +104,31 @@ export function chooseRequested(requested: OwnedCard): void {
 }
 
 /**
+ * Drop the offered card if the viewer no longer owns it.
+ *
+ * Steps 2 and 3 reload their collections whenever they regain focus, which is
+ * the moment a selection can be discovered to have gone stale: accepting a
+ * trade in another session, or on another device, moves a card out from under a
+ * wizard that is still holding it. `POST /trades` would refuse it — "You don't
+ * have that card to offer." — after four steps, and a selection the server will
+ * reject is not a selection.
+ *
+ * Called with the ids of a *successful* load only. A failed refresh proves
+ * nothing about what anybody owns, and clearing on one would treat a dropped
+ * connection as a traded card.
+ */
+export function reconcileOffered(ownedIds: ReadonlySet<string>): void {
+  if (draft.offered === null || ownedIds.has(draft.offered.id)) return;
+  commit({ ...draft, offered: null });
+}
+
+/** The same, for a requested card the partner no longer holds. */
+export function reconcileRequested(partnerIds: ReadonlySet<string>): void {
+  if (draft.requested === null || partnerIds.has(draft.requested.id)) return;
+  commit({ ...draft, requested: null });
+}
+
+/**
  * The string to show for a failure, given the copy to fall back on.
  *
  * An `ApiError`'s message is a sentence the server wrote for a human and is

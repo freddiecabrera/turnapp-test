@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, View } from "react-native";
-import { Redirect, useRouter } from "expo-router";
+import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { PartnerCardTile, SelectableCell } from "../../../src/components/CardPicker";
 import { PrimaryButton } from "../../../src/components/PrimaryButton";
 import {
@@ -13,7 +13,12 @@ import { api } from "../../../src/api";
 import { copy, fill } from "../../../src/copy";
 import { colors } from "../../../src/theme";
 import type { OwnedCard } from "../../../src/types";
-import { chooseRequested, messageFor, useTradeDraft } from "../../../src/wizard";
+import {
+  chooseRequested,
+  messageFor,
+  reconcileRequested,
+  useTradeDraft,
+} from "../../../src/wizard";
 
 /**
  * TH-11, step 3 of 4 — pick the card you are asking for.
@@ -49,12 +54,16 @@ export default function ChooseRequest() {
   // `null` means the cross-reference did not load, which is not an error state:
   // it degrades to an unmarked grid.
   const [alsoOwned, setAlsoOwned] = useState<Set<string> | null>(null);
+  // Only ever true before the first answer; a refresh swaps data in silently.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Focus can fire again before the previous load answers.
+  const runId = useRef(0);
+
   const load = useCallback(async () => {
     if (partnerId === null) return;
-    setLoading(true);
+    const id = ++runId.current;
     setError(null);
     try {
       // Their collection is the screen; the viewer's own is a garnish on it, so
@@ -68,17 +77,33 @@ export default function ChooseRequest() {
           .then((all) => all.filter((c) => c.owned).map((c) => c.id))
           .catch(() => null),
       ]);
+      if (id !== runId.current) return;
       setTheirs(cards);
       setAlsoOwned(mine === null ? null : new Set(mine));
+      // Their collection can move between this screen and the send. Dropping a
+      // selection they no longer hold is what stops the review step's "change
+      // what you're asking for" recovery from returning to the same refusal.
+      reconcileRequested(new Set(cards.map((c) => c.id)));
     } catch (e) {
+      if (id !== runId.current) return;
       setTheirs(null);
       setError(messageFor(e, copy.wizard.request.errorBody));
     } finally {
-      setLoading(false);
+      if (id === runId.current) setLoading(false);
     }
   }, [partnerId]);
 
-  useEffect(() => {
+  // On focus, not just on mount — see the note in the load above.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  // Retrying from the error state has no grid to sit behind, so it puts the
+  // screen back into its first-load state rather than leaving a dead button.
+  const retry = useCallback(() => {
+    setLoading(true);
     load();
   }, [load]);
 
@@ -116,7 +141,7 @@ export default function ChooseRequest() {
           title={copy.wizard.request.errorTitle}
           body={error ?? copy.wizard.request.errorBody}
         >
-          <PrimaryButton label={copy.wizard.retry} onPress={load} />
+          <PrimaryButton label={copy.wizard.retry} onPress={retry} />
           <ActionGap />
           <PrimaryButton
             label={copy.wizard.request.emptyAction}

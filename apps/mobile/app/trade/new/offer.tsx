@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { ActivityIndicator, FlatList, StyleSheet, View } from "react-native";
-import { Redirect, useRouter } from "expo-router";
+import { Redirect, useFocusEffect, useRouter } from "expo-router";
 import { CardTile } from "../../../src/components/CardTile";
 import { SelectableCell } from "../../../src/components/CardPicker";
 import { PrimaryButton } from "../../../src/components/PrimaryButton";
@@ -9,7 +9,12 @@ import { api } from "../../../src/api";
 import { copy } from "../../../src/copy";
 import { colors } from "../../../src/theme";
 import type { CardWithOwnership } from "../../../src/types";
-import { chooseOffered, messageFor, useTradeDraft } from "../../../src/wizard";
+import {
+  chooseOffered,
+  messageFor,
+  reconcileOffered,
+  useTradeDraft,
+} from "../../../src/wizard";
 
 /**
  * TH-11, step 2 of 4 — pick the card you are giving.
@@ -34,24 +39,51 @@ export default function ChooseOffer() {
   const draft = useTradeDraft();
 
   const [cards, setCards] = useState<CardWithOwnership[] | null>(null);
+  // Only ever true before the first answer. A refresh that lands over an
+  // existing grid swaps the data in without a spinner, because there is nothing
+  // to wait for on screen.
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
+  // Focus can fire again before the previous load answers. Without this the
+  // slower response wins whichever was asked for last.
+  const runId = useRef(0);
+
   const load = useCallback(async () => {
-    setLoading(true);
+    const id = ++runId.current;
     setError(null);
     try {
       const all = await api.cards();
-      setCards(all.filter((c) => c.owned));
+      if (id !== runId.current) return;
+      const owned = all.filter((c) => c.owned);
+      setCards(owned);
+      // A card accepted away from under this wizard in another session is no
+      // longer offerable, and a selection the server will reject is not one.
+      reconcileOffered(new Set(owned.map((c) => c.id)));
     } catch (e) {
+      if (id !== runId.current) return;
       setCards(null);
       setError(messageFor(e, copy.wizard.offer.errorBody));
     } finally {
-      setLoading(false);
+      if (id === runId.current) setLoading(false);
     }
   }, []);
 
-  useEffect(() => {
+  // Reloaded on focus, not just on mount. This screen is returned to by the
+  // review step's "change what you're giving" recovery, whose most likely cause
+  // is that the collection under it moved — coming back to the list that was
+  // already wrong would offer the same refusal a second time.
+  useFocusEffect(
+    useCallback(() => {
+      load();
+    }, [load])
+  );
+
+  // Retrying from the error state has no grid to sit behind, so it puts the
+  // screen back into its first-load state. Without this the button looks dead
+  // for the whole request.
+  const retry = useCallback(() => {
+    setLoading(true);
     load();
   }, [load]);
 
@@ -76,7 +108,7 @@ export default function ChooseOffer() {
           title={copy.wizard.offer.errorTitle}
           body={error ?? copy.wizard.offer.errorBody}
         >
-          <PrimaryButton label={copy.wizard.retry} onPress={load} />
+          <PrimaryButton label={copy.wizard.retry} onPress={retry} />
         </WizardNotice>
       );
     }
