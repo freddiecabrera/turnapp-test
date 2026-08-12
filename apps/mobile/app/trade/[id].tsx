@@ -15,7 +15,7 @@ import {
   type Recheck,
   type Recovery,
 } from "../../src/trade-review";
-import { ApiError, api } from "../../src/api";
+import { api, messageFor } from "../../src/api";
 import { copy, fill } from "../../src/copy";
 import { colors, fonts, radius } from "../../src/theme";
 import type { Card, CardWithOwnership, Trade } from "../../src/types";
@@ -63,19 +63,6 @@ type Phase =
   | { kind: "outcome" }
   /** An answer was refused. `recovery` decides what is offered next. */
   | { kind: "failed"; answer: Answer; message: string; recovery: Recovery };
-
-/**
- * The string to show for a failure.
- *
- * An `ApiError` carries a sentence the server wrote for a human — every 403,
- * 404 and 409 on the trade routes is worded that way — and those are rendered
- * verbatim rather than remapped. Anything else is a rejected fetch whose
- * message is a diagnostic ("Network request failed", a URL, a native stack) and
- * must never reach the screen, so it becomes copy instead.
- */
-function messageFor(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
 
 /** A card's name, or the placeholder `TradeCards` uses for the same gap. */
 function nameOf(card: Card): string {

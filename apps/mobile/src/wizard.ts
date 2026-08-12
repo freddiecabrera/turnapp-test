@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react";
-import { ApiError } from "./api";
 import type { CardWithOwnership, OwnedCard, UserSummary } from "./types";
 
 /**
@@ -129,17 +128,8 @@ export function reconcileRequested(partnerIds: ReadonlySet<string>): void {
 }
 
 /**
- * The string to show for a failure, given the copy to fall back on.
- *
- * An `ApiError`'s message is a sentence the server wrote for a human and is
- * rendered verbatim — the routes answer `{ error }` and those strings are
- * user-facing copy (AGENTS.md, "Conventions"). Anything else is a rejected
- * fetch whose message is a diagnostic ("Network request failed", a URL, a
- * native stack) and must never reach a screen, so it becomes copy instead.
- *
- * The same distinction `TradingBoard` makes, lifted out because four screens
- * now need it and each one has a different sentence to fall back on.
+ * Re-exported so each wizard step keeps one import for the draft and the
+ * failure string it renders beside it. The rule itself lives next to
+ * `ApiError`, which is the class it tests.
  */
-export function messageFor(error: unknown, fallback: string): string {
-  return error instanceof ApiError ? error.message : fallback;
-}
+export { messageFor } from "./api";

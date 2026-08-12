@@ -12,7 +12,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { PrimaryButton } from "./PrimaryButton";
 import { TradeRow } from "./TradeRow";
-import { ApiError, api } from "../api";
+import { api, messageFor } from "../api";
 import { copy, fill } from "../copy";
 import { colors, fonts, radius } from "../theme";
 import type { Trade } from "../types";
@@ -38,19 +38,6 @@ type Filter = (typeof FILTERS)[number];
 
 /** `incoming`/`outgoing` are the viewer's words for the API's `received`/`sent`. */
 const FILTER_DIRECTION = { incoming: "received", outgoing: "sent" } as const;
-
-/**
- * The string to show for a failed load.
- *
- * An `ApiError` carries a sentence the server wrote for a human — `GET /trades`
- * can answer 401 or a fixed-sentence 500 — and those are rendered verbatim
- * rather than wrapped or remapped. Anything else is a rejected fetch whose
- * message is a diagnostic ("Network request failed", a URL, a native stack) and
- * must never reach the screen, so it becomes copy instead.
- */
-function messageFor(error: unknown): string {
-  return error instanceof ApiError ? error.message : copy.board.error.body;
-}
 
 export function TradingBoard() {
   const router = useRouter();
@@ -78,7 +65,7 @@ export function TradingBoard() {
       setError(null);
     } catch (e) {
       if (id !== runId.current) return;
-      setError(messageFor(e));
+      setError(messageFor(e, copy.board.error.body));
     } finally {
       if (id === runId.current) setLoading(false);
     }

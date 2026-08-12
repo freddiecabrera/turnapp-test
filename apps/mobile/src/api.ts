@@ -63,6 +63,23 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * The string to show for a failure, given the copy to fall back on.
+ *
+ * The rule `ApiError` exists to encode, written as a call. An `ApiError`'s
+ * message is a sentence the server wrote for a human and is rendered verbatim —
+ * the routes answer `{ error }` and those strings are user-facing copy
+ * (AGENTS.md, "Conventions"). Anything else is a rejected fetch whose message is
+ * a diagnostic ("Network request failed", a URL, a native stack) and must never
+ * reach a screen, so it becomes copy instead.
+ *
+ * `fallback` is per call site rather than one shared string: every surface that
+ * renders a failure has its own sentence for the request it just lost.
+ */
+export function messageFor(error: unknown, fallback: string): string {
+  return error instanceof ApiError ? error.message : fallback;
+}
+
 let authToken: string | null = null;
 
 export function setAuthToken(token: string | null) {
