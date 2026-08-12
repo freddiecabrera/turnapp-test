@@ -4,8 +4,15 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { PrimaryButton } from "../../src/components/PrimaryButton";
-import { TradeCards, giveAndGet } from "../../src/components/TradeCards";
-import { STATUS_KEY, isActionable } from "../../src/components/TradeRow";
+import { TradeCards } from "../../src/components/TradeCards";
+import {
+  giveAndGet,
+  isActionable,
+  isUnfulfillable,
+  partnerOf,
+  statusLine,
+  tradeDateLabel,
+} from "../../src/trade";
 import {
   brokenSide,
   finishedTrade,
@@ -364,7 +371,7 @@ export default function TradeReview() {
 
   // The other party, and the preposition that is true of the viewer's side.
   const sent = trade.direction === "sent";
-  const partner = sent ? trade.toUser : trade.fromUser;
+  const partner = partnerOf(trade);
 
   // Only the recipient can ever end a trade, and only while it is pending. Note
   // this is deliberately wider than `isActionable`: a trade the API says can no
@@ -377,11 +384,7 @@ export default function TradeReview() {
   // reused so the two surfaces cannot disagree about when accepting is possible.
   const canAccept = isActionable(trade);
 
-  // Strictly `false`. `fulfillable` is `boolean | null` and `null` means "not
-  // applicable" — the serializer forces it for every answered trade — so
-  // drawing the can't-complete treatment on falsiness would mark finished
-  // trades as broken ones.
-  const unfulfillable = trade.fulfillable === false;
+  const unfulfillable = isUnfulfillable(trade);
 
   const ownership = ownershipOf(trade, cards);
 
@@ -404,10 +407,7 @@ export default function TradeReview() {
       ? fill(copy.review.ownership.alreadyOwn, { count: ownership.getQuantity })
       : null;
 
-  // `createdAt`, matching the board row: the board sorts on it, so it is the
-  // date that makes a trade's position in the list read as deliberate.
-  const created = new Date(trade.createdAt);
-  const dateLabel = Number.isNaN(created.getTime()) ? "" : created.toLocaleDateString();
+  const dateLabel = tradeDateLabel(trade);
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -458,9 +458,7 @@ export default function TradeReview() {
           // same row means opposite things to the two parties, and one set of
           // strings is what keeps the two surfaces saying the same thing.
           <View style={styles.actions}>
-            <Text style={styles.status}>
-              {copy.board.status[trade.direction][STATUS_KEY[trade.status]]}
-            </Text>
+            <Text style={styles.status}>{statusLine(trade)}</Text>
             {sent && trade.status === "PENDING" && (
               <Text style={styles.hint}>{copy.board.sentInert}</Text>
             )}

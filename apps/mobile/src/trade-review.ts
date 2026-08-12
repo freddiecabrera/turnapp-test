@@ -1,5 +1,5 @@
 import { ApiError } from "./api";
-import { giveAndGet } from "./components/TradeCards";
+import { giveAndGet } from "./trade";
 import type { CardWithOwnership, Trade } from "./types";
 
 /**
