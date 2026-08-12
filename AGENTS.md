@@ -240,16 +240,31 @@ Seeded by `apps/api/prisma/seed.ts`.
 | Admin | `admin@turn.app` | `admin123` |
 | 8 generated users | `<first>.<last><n>@turn.app` | `turn123` |
 
-**All eight generated users share the password `turn123`** (`seed.ts:350`) — so a second real
-account is available with no seed changes. Useful pairs for anything involving two users:
+The first two rows are literals in the seed. The eight generated users are not: their names are
+drawn with unseeded `Math.random()` (`seed.ts:332`), and so is the subset of cards each one
+gets. Every `npm run api:seed` rerolls all of it, so no specific generated email or card count
+is worth writing down here — whatever is in your database now is not what the next person to
+reseed will see. Don't trust a name you read in a doc; ask the database.
 
-| User | Cards owned |
-| --- | --- |
-| `testing@turn.app` | 8 of 15 |
-| `taylor.poole2@turn.app` | 12 of 15 |
-| `jamie.reed7@turn.app` | 2 of 15 |
+What *is* fixed is the shape. Eight of them, emails `<first>.<last><n>@turn.app` where `<n>` is
+the loop index `0`–`7`, `userIdNumber`s `100300`–`100307`, and **the password `turn123` for all
+eight** (`seed.ts:350`) — so a second real account for anything involving two users, trading
+above all, is available with no seed changes.
 
-List them all: `docker exec turnapp-db psql -U turn -d turnapp -c 'select email, username from "User";'`
+Which of the eight is worth logging in as depends on how much they own, and that is a query:
+
+```bash
+docker exec turnapp-db psql -U turn -d turnapp -c \
+  'select u."userIdNumber", u.email, count(uc.id) as cards
+   from "User" u left join "UserCard" uc on uc."userId" = u.id
+   where u."isAdmin" = false
+   group by u.id order by cards desc;'
+```
+
+`cards` is distinct cards out of the 15 in season one — that 15 is a fixed array in the seed,
+as is the demo user's own collection of 8. A partner holding one card makes for a thin trade,
+and the roll does produce those. The `isAdmin` filter mirrors `GET /users/search`, which
+excludes admins, so every row it returns is an account you can actually trade with.
 
 ---
 
