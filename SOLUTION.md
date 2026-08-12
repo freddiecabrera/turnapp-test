@@ -25,7 +25,7 @@ permanent log rather than a queue of open offers, so a declined trade still read
 on both boards.
 
 **The mobile screens sit on top of it**: the trading board behind the existing `trading board`
-pill, a four-step create-trade wizard, and the approve/decline screen — with 158 mobile tests
+pill, a four-step create-trade wizard, and the approve/decline screen — with 169 mobile tests
 beside them. Every user-facing string lives in one file, `apps/mobile/src/copy.ts`, so the
 wording is editable without touching a component.
 
@@ -83,7 +83,7 @@ npm run api:setup                   # docker postgres + prisma generate + migrat
 One command is the whole gate:
 
 ```bash
-npm run verify   # api typecheck + mobile typecheck + admin build + 323 tests
+npm run verify   # api typecheck + mobile typecheck + admin build + 334 tests
 ```
 
 The tests are integration tests against real Postgres, over HTTP with supertest, on a
