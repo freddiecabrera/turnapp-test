@@ -8,7 +8,7 @@ import {
   resetDatabase,
   twoTraders,
 } from "./helpers";
-import { DEV_DATABASE_URL } from "./env";
+import { DEV_DATABASE_URL, TEST_DATABASE_URL } from "./env";
 
 /**
  * Smoke tests for the harness itself. If these fail, no other test result in
@@ -17,8 +17,14 @@ import { DEV_DATABASE_URL } from "./env";
 describe("test harness", () => {
   beforeEach(resetDatabase);
 
-  it("runs against the test database, not the dev one", () => {
-    expect(process.env.DATABASE_URL).toMatch(/_test(\?|$)/);
+  it("runs against this worktree's own test database, not the dev one", () => {
+    // `_test_<8 hex>` is the per-checkout name `env.ts` derives. Asserting the
+    // shape, and not merely "different from the dev URL", is what catches a
+    // derivation that quietly went back to one shared `turnapp_test`: that
+    // passes every other test in this file, right up until a second worktree
+    // runs `migrate reset` on the tables this one is using.
+    expect(process.env.DATABASE_URL).toMatch(/_test_[0-9a-f]{8}(\?|$)/);
+    expect(process.env.DATABASE_URL).toBe(TEST_DATABASE_URL);
     expect(process.env.DATABASE_URL).not.toBe(DEV_DATABASE_URL);
   });
 

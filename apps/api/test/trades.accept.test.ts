@@ -12,6 +12,7 @@ import {
   inFlight,
   prisma,
   resetDatabase,
+  totalCopiesEverywhere,
   totalCopiesOf,
   twoTraders,
   waitForLockWaiters,
@@ -485,7 +486,7 @@ describe("POST /trades/:id/accept", () => {
   });
 
   describe("concurrency", () => {
-    it("lets exactly one of two simultaneous accepts through, and swaps once", async () => {
+    it("answers a repeated accept 409 and swaps once, whichever guard catches it", async () => {
       const { alice, bob, aliceOnly, bobOnly } = await twoTraders();
       const trade = await pendingTrade({
         fromUserId: alice.id,
@@ -493,12 +494,17 @@ describe("POST /trades/:id/accept", () => {
         offeredCardId: aliceOnly.id,
         requestedCardId: bobOnly.id,
       });
+      const before = await totalCopiesEverywhere();
 
-      // Both in flight before either finishes. Which guard refuses the loser
-      // depends on the schedule: if its `findUnique` lands after the winner
-      // commits, the pre-transaction status check answers and the transaction
-      // is never entered. Same status, same sentence either way — so this case
-      // pins the outcome, and the one below it pins the path.
+      // `Promise.all` over two supertest requests does not reliably overlap
+      // them — measured on this suite they run end to end, one after the other,
+      // most of the time — so this case is renamed to stop claiming a race it
+      // cannot guarantee. It is still worth keeping, for the property it does
+      // prove: whichever guard refuses the loser, the *answer* is the same.
+      // The readable pre-transaction status check catches it when the first has
+      // already committed; the in-transaction claim catches it when it hasn't.
+      // Same 409, same sentence, one swap, in both. The case below this one is
+      // where the claim is actually put under a second writer.
       const results = await Promise.all([accept(bob, trade.id), accept(bob, trade.id)]);
 
       expect(results.map((r) => r.status).sort((a, b) => a - b)).toEqual([200, 409]);
@@ -511,6 +517,10 @@ describe("POST /trades/:id/accept", () => {
       expect(await copiesOf(bob.id, bobOnly.id)).toBe(0);
       expect(await copiesOf(alice.id, bobOnly.id)).toBe(1);
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+      // A swap relocates copies and creates none. Two swaps of the same trade
+      // would leave this two higher, which no per-user count above can see
+      // without somebody having predicted which pair of rows to look at.
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
 
     it("refuses a second accept that reached its claim while the first held it", async () => {
@@ -530,6 +540,7 @@ describe("POST /trades/:id/accept", () => {
         offeredCardId: mine.id,
         requestedCardId: yours.id,
       });
+      const before = await totalCopiesEverywhere();
 
       const pending = await withUserCardLocked(alice.id, mine.id, async () => {
         // The first accept claims the trade and then parks inside `moveCard`,
@@ -559,9 +570,10 @@ describe("POST /trades/:id/accept", () => {
       expect(await copiesOf(bob.id, yours.id)).toBe(1);
       expect(await copiesOf(alice.id, yours.id)).toBe(1);
       expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
     });
 
-    it("hands one contested copy to exactly one of two trades accepted at once", async () => {
+    it("refuses the second of two trades queued on the same last copy", async () => {
       const season = await createSeason();
       const prize = await createCard(season.id, "Prize");
       const bobCard = await createCard(season.id, "Bob's");
@@ -588,45 +600,167 @@ describe("POST /trades/:id/accept", () => {
         offeredCardId: prize.id,
         requestedCardId: carolCard.id,
       });
+      const before = await totalCopiesEverywhere();
 
-      // Two different Trade rows, so nothing can short-circuit either request
-      // before its transaction: both claims succeed, and the copy they are both
-      // reaching for is what decides it. `moveCard`'s `quantity: { gte: 1 }`
-      // guard is the only thing standing between this and two copies of a card
-      // there was one of — and this is the only case that runs it concurrently.
-      const [bobRes, carolRes] = await Promise.all([
-        accept(bob, toBob.id),
-        accept(carol, toCarol.id),
-      ]);
+      // Two different Trade rows, so neither request can be short-circuited
+      // before its transaction: both claims succeed, and the single copy they
+      // are both reaching for is the only thing that can separate them. Under
+      // `Promise.all` that contention happened only when the schedule felt like
+      // it — most runs finished bob's request before carol's began, which tests
+      // sequential re-verification, not two writers on one row. Locking the
+      // contested `UserCard` makes the overlap the case rather than the hope.
+      const pending = await withUserCardLocked(alice.id, prize.id, async () => {
+        // Bob's accept claims its own trade and parks inside `moveCard`, on the
+        // decrement of alice's only copy, with nothing committed.
+        const first = inFlight(accept(bob, toBob.id));
+        await waitForLockWaiters(1);
+        // Carol's accept claims *its* trade — a different row, so nothing
+        // blocks it — and queues behind bob on the copy. Postgres hands the row
+        // to the waiters in the order they arrived, so bob wins and carol is
+        // left re-evaluating `quantity: { gte: 1 }` against a row bob has
+        // deleted. That count-zero check is what has to answer here; without it
+        // carol's transaction runs on into the upsert and mints a second copy
+        // of a card there was one of.
+        const second = inFlight(accept(carol, toCarol.id));
+        await waitForLockWaiters(2);
+        return { first, second };
+      });
+      const bobRes = await pending.first;
+      const carolRes = await pending.second;
 
-      expect([bobRes.status, carolRes.status].sort((a, b) => a - b)).toEqual([200, 409]);
-
-      const bobWon = bobRes.status === 200;
-      const winner = bobWon
-        ? { user: bob, card: bobCard, trade: toBob }
-        : { user: carol, card: carolCard, trade: toCarol };
-      const loser = bobWon
-        ? { user: carol, card: carolCard, trade: toCarol, res: carolRes }
-        : { user: bob, card: bobCard, trade: toBob, res: bobRes };
-
+      expect(bobRes.status).toBe(200);
+      expect(carolRes.status).toBe(409);
       // The loser hears about alice's side, not their own: they still hold what
       // they offered, and it is the prize that is gone.
-      expect(loser.res.body).toEqual({ error: SENDER_LOST_IT });
+      expect(carolRes.body).toEqual({ error: SENDER_LOST_IT });
 
       // One copy before, one copy after. Per-user counts say where it went;
       // this says nothing was invented on the way.
       expect(await totalCopiesOf(prize.id)).toBe(1);
-      expect(await copiesOf(winner.user.id, prize.id)).toBe(1);
-      expect(await copiesOf(loser.user.id, prize.id)).toBe(0);
+      expect(await copiesOf(bob.id, prize.id)).toBe(1);
+      expect(await copiesOf(carol.id, prize.id)).toBe(0);
       expect(await hasRowFor(alice.id, prize.id)).toBe(false);
 
-      // The loser's half of the swap unwound with it, and their trade is still
+      // Carol's half of the swap unwound with it, and her trade is still
       // pending — nothing a human did to it.
-      expect(await copiesOf(loser.user.id, loser.card.id)).toBe(1);
-      expect(await copiesOf(alice.id, loser.card.id)).toBe(0);
-      expect(await copiesOf(alice.id, winner.card.id)).toBe(1);
-      expect((await storedTrade(winner.trade.id)).status).toBe("ACCEPTED");
-      expect((await storedTrade(loser.trade.id)).status).toBe("PENDING");
+      expect(await copiesOf(carol.id, carolCard.id)).toBe(1);
+      expect(await copiesOf(alice.id, carolCard.id)).toBe(0);
+      expect(await copiesOf(alice.id, bobCard.id)).toBe(1);
+      expect((await storedTrade(toBob.id)).status).toBe("ACCEPTED");
+      expect((await storedTrade(toCarol.id)).status).toBe("PENDING");
+      // Carol's transaction rolled back whole, so nothing it touched survives
+      // in either direction — including the increment it had not reached.
+      expect(await totalCopiesEverywhere()).toBe(before);
+    });
+  });
+
+  /**
+   * Mirror trades: alice offers X for Y while bob offers Y for X.
+   *
+   * Both are legal at creation — `POST /trades` has a case for that — and the
+   * unique index does not touch them, because it keys on `(fromUserId,
+   * toUserId, offeredCardId, requestedCardId)` and the two rows disagree on
+   * every one of those columns. So the pair reaches accept intact, and the two
+   * trades are then competing for the same two copies from opposite ends.
+   *
+   * **This contradicts DESIGN.md.** The edge-case section says accepting both
+   * "swaps the cards and then swaps them back". It cannot: the offered card
+   * always moves *from* `fromUser`, so once alice's accept has handed X to bob
+   * and taken Y from him, bob no longer holds the Y his own trade offers, and
+   * `moveCard`'s guard refuses the second accept with the 409 it refuses any
+   * vanished card with. The cards are swapped exactly once and stay swapped.
+   * Both tests below assert what actually happens; the design note is the thing
+   * that is wrong, not the code, and the outcome it describes ("trade completed
+   * does not imply state changed") never arises.
+   */
+  describe("mirror trades", () => {
+    /** alice offers `aliceOnly` for `bobOnly`; bob offers `bobOnly` for `aliceOnly`. */
+    async function mirrored() {
+      const fixtures = await twoTraders();
+      const { alice, bob, aliceOnly, bobOnly } = fixtures;
+      const aliceOffers = await pendingTrade({
+        fromUserId: alice.id,
+        toUserId: bob.id,
+        offeredCardId: aliceOnly.id,
+        requestedCardId: bobOnly.id,
+      });
+      const bobOffers = await pendingTrade({
+        fromUserId: bob.id,
+        toUserId: alice.id,
+        offeredCardId: bobOnly.id,
+        requestedCardId: aliceOnly.id,
+      });
+      return { ...fixtures, aliceOffers, bobOffers };
+    }
+
+    it("refuses the second, whose offered card the first already moved", async () => {
+      const { alice, bob, aliceOnly, bobOnly, aliceOffers, bobOffers } = await mirrored();
+      const before = await totalCopiesEverywhere();
+
+      const first = await accept(bob, aliceOffers.id);
+      expect(first.status).toBe(200);
+
+      // Bob's trade still offers `bobOnly`, which he handed to alice a moment
+      // ago. Nothing marked it unfulfillable — sibling trades are deliberately
+      // not cascaded — so it is the accept-time ownership check that catches
+      // it, which is the entire reason ownership is re-verified here.
+      const second = await accept(alice, bobOffers.id);
+      expect(second.status).toBe(409);
+      expect(second.body).toEqual({ error: SENDER_LOST_IT });
+
+      // Swapped once and left swapped.
+      expect(await copiesOf(alice.id, aliceOnly.id)).toBe(0);
+      expect(await copiesOf(bob.id, aliceOnly.id)).toBe(1);
+      expect(await copiesOf(bob.id, bobOnly.id)).toBe(0);
+      expect(await copiesOf(alice.id, bobOnly.id)).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
+
+      expect((await storedTrade(aliceOffers.id)).status).toBe("ACCEPTED");
+      expect((await storedTrade(bobOffers.id)).status).toBe("PENDING");
+    });
+
+    it("reaches the same collections whichever mirror wins, and conserves every copy", async () => {
+      // Not pinned, and not claiming to be: an ordering-independent invariant
+      // is the only thing worth asserting here, because the orderings genuinely
+      // differ in what they answer. Run unchoreographed, the two transactions
+      // take the same two `UserCard` rows in opposite orders, so Postgres
+      // sometimes resolves this by deadlock detection — DESIGN.md's edge-case
+      // table has that row, and the aborted transaction surfaces as a 500
+      // rather than a 409 because Prisma 5.22 does not map `40P01` to a code
+      // the route could branch on. Measured over six runs it was a 500 four
+      // times and a 409 twice.
+      //
+      // What does not vary: exactly one accept succeeds, and the cards end up
+      // in the same place either way — the two trades describe the same swap
+      // from opposite ends, so whichever commits produces the same collections.
+      // A 500 that had half-applied a swap, or a deadlock loser that had
+      // committed its decrement, would both land here.
+      const { alice, bob, aliceOnly, bobOnly, aliceOffers, bobOffers } = await mirrored();
+      const before = await totalCopiesEverywhere();
+
+      const [fromAlice, fromBob] = await Promise.all([
+        accept(bob, aliceOffers.id),
+        accept(alice, bobOffers.id),
+      ]);
+
+      const statuses = [fromAlice.status, fromBob.status];
+      expect(statuses.filter((s) => s === 200)).toHaveLength(1);
+      // The loser is refused, however Postgres got there. Both are honest
+      // answers to "somebody else took that copy"; only the 409 is the one the
+      // caller can act on, which is why DESIGN.md files the 500 as a defect in
+      // what the loser is told rather than in what happened.
+      expect([409, 500]).toContain(statuses.find((s) => s !== 200));
+
+      expect(await copiesOf(alice.id, aliceOnly.id)).toBe(0);
+      expect(await copiesOf(bob.id, aliceOnly.id)).toBe(1);
+      expect(await copiesOf(bob.id, bobOnly.id)).toBe(0);
+      expect(await copiesOf(alice.id, bobOnly.id)).toBe(1);
+      expect(await totalCopiesEverywhere()).toBe(before);
+
+      // Exactly one trade was answered; the refused one is still PENDING,
+      // because nothing a human did to it.
+      expect(await prisma.trade.count({ where: { status: "ACCEPTED" } })).toBe(1);
+      expect(await prisma.trade.count({ where: { status: "PENDING" } })).toBe(1);
     });
   });
 
