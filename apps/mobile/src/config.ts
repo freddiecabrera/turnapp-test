@@ -6,7 +6,7 @@ const API_PORT = 4000;
 // The Expo dev server tells the app which host (your computer's LAN IP) it was
 // loaded from, e.g. "10.0.0.75:8081". We reuse that host for the API so a real
 // phone on the same Wi-Fi can reach it automatically — no per-machine config.
-export function deriveDevHost(): string | null {
+function deriveDevHost(): string | null {
   const hostUri =
     Constants.expoConfig?.hostUri ??
     (Constants as any).expoGoConfig?.debuggerHost ??
@@ -17,7 +17,7 @@ export function deriveDevHost(): string | null {
   return host || null;
 }
 
-export function resolveApiUrl(): string {
+function resolveApiUrl(): string {
   // 1. Explicit override always wins (e.g. a tunnel or a deployed API).
   if (process.env.EXPO_PUBLIC_API_URL) return process.env.EXPO_PUBLIC_API_URL;
 

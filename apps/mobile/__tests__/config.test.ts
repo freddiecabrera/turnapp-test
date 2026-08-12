@@ -1,6 +1,10 @@
 // `API_URL` is computed at module load time, so every case here has to install
 // its mocks *before* `src/config` is first required. `jest.resetModules()` plus
-// a dynamic `require` gives each case a clean module registry.
+// a dynamic `require` gives each case a clean module registry — and that seam,
+// not a widened export surface, is what makes the precedence chain assertable:
+// `API_URL` is `resolveApiUrl()`, so re-loading the module under each set of
+// mocks reaches the same branches without the app shipping helpers it does not
+// otherwise need.
 
 type LoadOptions = {
   /** Value for EXPO_PUBLIC_API_URL; omit to leave the override unset. */
@@ -37,52 +41,35 @@ afterEach(() => {
   jest.resetModules();
 });
 
-describe("resolveApiUrl", () => {
+describe("API_URL", () => {
   it("prefers the EXPO_PUBLIC_API_URL override over everything else", () => {
-    const { resolveApiUrl, API_URL } = loadConfig({
+    const { API_URL } = loadConfig({
       apiUrlOverride: "https://api.turn.app",
       // Both lower-precedence sources are available and must be ignored.
       hostUri: "10.0.0.75:8081",
       platform: "android",
     });
 
-    expect(resolveApiUrl()).toBe("https://api.turn.app");
     expect(API_URL).toBe("https://api.turn.app");
   });
 
   it("falls back to the Expo dev-server host on port 4000", () => {
-    const { resolveApiUrl, API_URL } = loadConfig({ hostUri: "10.0.0.75:8081" });
+    // Also pins that the dev server's own port is dropped before 4000 is added.
+    const { API_URL } = loadConfig({ hostUri: "10.0.0.75:8081" });
 
-    expect(resolveApiUrl()).toBe("http://10.0.0.75:4000");
     expect(API_URL).toBe("http://10.0.0.75:4000");
   });
 
   it("falls back to localhost:4000 on iOS when there is no dev host", () => {
-    const { resolveApiUrl, API_URL } = loadConfig({ platform: "ios" });
+    const { API_URL } = loadConfig({ platform: "ios" });
 
-    expect(resolveApiUrl()).toBe("http://localhost:4000");
     expect(API_URL).toBe("http://localhost:4000");
   });
 
   it("falls back to 10.0.2.2:4000 on Android when there is no dev host", () => {
-    const { resolveApiUrl, API_URL } = loadConfig({ platform: "android" });
+    const { API_URL } = loadConfig({ platform: "android" });
 
-    expect(resolveApiUrl()).toBe("http://10.0.2.2:4000");
     expect(API_URL).toBe("http://10.0.2.2:4000");
-  });
-});
-
-describe("deriveDevHost", () => {
-  it("strips the port off the Expo dev-server hostUri", () => {
-    const { deriveDevHost } = loadConfig({ hostUri: "10.0.0.75:8081" });
-
-    expect(deriveDevHost()).toBe("10.0.0.75");
-  });
-
-  it("returns null when Expo reports no host", () => {
-    const { deriveDevHost } = loadConfig();
-
-    expect(deriveDevHost()).toBeNull();
   });
 });
 
