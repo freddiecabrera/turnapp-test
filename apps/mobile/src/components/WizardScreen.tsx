@@ -21,23 +21,32 @@ import { colors, fonts } from "../theme";
  * interpolates the partner's username and the caller is the only thing that
  * knows it. Every value passed still comes from `copy.ts`.
  *
- * `canGoBack` exists for exactly one state: the confirmation after a trade has
- * been created. Going back from there would return to a card picker whose work
- * is already done, and re-sending from it only earns the 409 for an offer that
- * already exists. A terminal state gets one door.
+ * `step` and `title` travel together or not at all, which the type says rather
+ * than trusts: they are the two halves of one header, and a step that drew a
+ * progress bar over no title, or a title over no progress, would be a mistake
+ * in every case. Omitting both is how a state says it is not a step of the
+ * wizard — see the confirmation in `app/trade/new/review.tsx`, which is the
+ * record of something that already happened and not a form to fill in.
+ *
+ * `canGoBack` exists for exactly one state: that same confirmation. Going back
+ * from there would return to a card picker whose work is already done, and
+ * re-sending from it only earns the 409 for an offer that already exists. A
+ * terminal state gets one door.
  */
-export function WizardScreen({
-  step,
-  title,
-  canGoBack = true,
-  children,
-}: {
-  /** 1-based, matching `copy.wizard.progress`. */
-  step: number;
-  title: string;
+type WizardScreenProps = {
   canGoBack?: boolean;
   children: ReactNode;
-}) {
+} & (
+  | {
+      /** 1-based, matching `copy.wizard.progress`. */
+      step: number;
+      title: string;
+    }
+  | { step?: never; title?: never }
+);
+
+export function WizardScreen(props: WizardScreenProps) {
+  const { canGoBack = true, children } = props;
   const router = useRouter();
 
   return (
@@ -53,15 +62,20 @@ export function WizardScreen({
           <Ionicons name="chevron-back" size={26} color={colors.black} />
         </Pressable>
       ) : (
-        // Keeps the progress bar and title at the same height whether or not
-        // the chevron is drawn, so a state change does not jump the layout.
+        // Holds the row the chevron would occupy, so a state change does not
+        // jump what sits under it — and so a header-less state still clears the
+        // top inset instead of starting against the status bar.
         <View style={styles.backSpacer} />
       )}
 
-      <WizardProgress step={step} />
-      <Text style={styles.title} numberOfLines={2}>
-        {title}
-      </Text>
+      {props.step !== undefined && (
+        <>
+          <WizardProgress step={props.step} />
+          <Text style={styles.title} numberOfLines={2}>
+            {props.title}
+          </Text>
+        </>
+      )}
 
       <View style={styles.body}>{children}</View>
     </SafeAreaView>
