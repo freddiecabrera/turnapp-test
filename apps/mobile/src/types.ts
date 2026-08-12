@@ -97,4 +97,4 @@ export interface AuthResponse {
   user: User;
 }
 
-export const POINT_TIERS = [100, 500, 1000, 5000, 10000];
+export const POINT_TIERS = [100, 500, 1000, 5000, 10000] as const;

@@ -15,7 +15,9 @@ export function TierBar({
   onDark = true,
 }: {
   balance: number;
-  tiers: number[];
+  // Read, never mutated — `readonly` so the `as const` POINT_TIERS in
+  // src/types.ts can be passed straight through as a fallback.
+  tiers: readonly number[];
   onDark?: boolean;
 }) {
   const [width, setWidth] = useState(0);

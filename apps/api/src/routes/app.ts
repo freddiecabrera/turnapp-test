@@ -18,7 +18,12 @@ appRouter.get("/seasons", async (_req, res) => {
 appRouter.get("/cards", async (req, res) => {
   const seasonId = req.query.seasonId as string | undefined;
   const cards = await prisma.card.findMany({
-    where: seasonId ? { seasonId } : undefined,
+    // Spread rather than `where: seasonId ? ... : undefined`. Prisma's arg type
+    // declares `where?: CardWhereInput`, so under exactOptionalPropertyTypes an
+    // explicit `undefined` is not the same as omitting the key. Same query
+    // either way; this is the form that says "no filter" rather than
+    // "filter by nothing".
+    ...(seasonId ? { where: { seasonId } } : {}),
     orderBy: { cardNumber: "asc" },
   });
 

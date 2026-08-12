@@ -216,7 +216,9 @@ function NewCollectionModal({
     setBusy(true);
     setError(null);
     try {
-      await api.createCollection({ name, description: description || undefined });
+      // `description?: string`, so the key is omitted rather than set to
+      // undefined. JSON.stringify drops it either way — same request body.
+      await api.createCollection({ name, ...(description ? { description } : {}) });
       onCreated();
     } catch (err) {
       setError((err as Error).message);

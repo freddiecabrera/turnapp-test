@@ -3,6 +3,12 @@ import { Router, RouterOptions } from "express";
 /** The registration methods this app uses. `router.route()` is not one of them. */
 const REGISTRARS = ["use", "all", "get", "post", "put", "patch", "delete"] as const;
 
+/** The names above, as a type — the only keys of `Router` this file touches. */
+type Registrar = (typeof REGISTRARS)[number];
+
+/** What each of those is, once its overloads are flattened. */
+type AnyRegistrar = (...args: unknown[]) => unknown;
+
 /**
  * `express.Router()`, but a handler that rejects reaches the error middleware
  * instead of killing the process.
@@ -28,8 +34,11 @@ export function asyncRouter(options?: RouterOptions): Router {
   const router = Router(options);
 
   // Cast once: the real signatures are heavily overloaded, and re-deriving them
-  // per method buys nothing when every argument is forwarded untouched.
-  const registrars = router as unknown as Record<string, (...args: unknown[]) => unknown>;
+  // per method buys nothing when every argument is forwarded untouched. Keyed
+  // by `Registrar` rather than `string`, because `Router` has string keys that
+  // are not functions at all — `router.stack` is an array — and a
+  // `Record<string, ...>` would claim otherwise for every one of them.
+  const registrars = router as unknown as Record<Registrar, AnyRegistrar>;
   for (const method of REGISTRARS) {
     const register = registrars[method].bind(router);
     registrars[method] = (...args: unknown[]) => register(...args.map(wrap));
@@ -41,12 +50,22 @@ export function asyncRouter(options?: RouterOptions): Router {
 /**
  * Route a handler's rejection to `next`, leaving everything else untouched.
  *
- * Paths, arrays and option objects pass straight through. Arity is the only way
+ * Arrays are recursed into rather than passed through. `router.get(path, [h1,
+ * h2])` is one of the two forms Express accepts a handler in, so returning the
+ * array untouched would leave every handler inside it unwrapped — the exact
+ * unhandled rejection this module exists to prevent, with the request hanging
+ * unanswered and Node 20 exiting the process. Nothing here registers handlers
+ * that way today, which is why it has to be covered rather than left: the
+ * guarantee above is that the boundary *cannot* be forgotten, and a second
+ * registration form that silently skips it is a way to forget it.
+ *
+ * Paths and option objects still pass straight through. Arity is the only way
  * to tell an error handler `(err, req, res, next)` from a normal one, and
  * Express reads it off `Function.length` — so each wrapper has to declare the
  * same count, or a wrapped error handler would silently stop being one.
  */
 function wrap(handler: unknown): unknown {
+  if (Array.isArray(handler)) return handler.map(wrap);
   if (typeof handler !== "function") return handler;
 
   const call = (args: unknown[], next: unknown) => {
