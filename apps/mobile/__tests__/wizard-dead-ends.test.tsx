@@ -157,7 +157,9 @@ describe("step 3 — they own nothing", () => {
 
     render(<ChooseRequest />);
 
-    expect(await screen.findByText(copy.wizard.request.empty)).toBeOnTheScreen();
+    expect(
+      await screen.findByText(fill(copy.wizard.request.empty, { username: PARTNER.username }))
+    ).toBeOnTheScreen();
     fireEvent.press(screen.getByText(copy.wizard.request.emptyAction));
 
     // `dismissTo` rather than a walk back: step 1 keeps its query and its
@@ -185,7 +187,9 @@ describe("step 3 — their only card is the one being offered", () => {
 
     // This person does have a card. Telling them to find somebody else would
     // send them away from a trade that works.
-    expect(screen.queryByText(copy.wizard.request.empty)).toBeNull();
+    expect(
+      screen.queryByText(fill(copy.wizard.request.empty, { username: PARTNER.username }))
+    ).toBeNull();
   });
 
   it("routes back to step 2, because the offer is what has to change", async () => {

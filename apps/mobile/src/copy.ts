@@ -247,7 +247,12 @@ export const copy = {
       // and this is reachable. A dead end for this partner only — `emptyAction`
       // goes back to the search, and must NOT read as abandoning the trade,
       // because the card you picked to give is kept. Short.
-      empty: "They have no cards to trade.",
+      //
+      // `empty` interpolates {username} — keep the token, it is what says which
+      // person this dead end is about. The name can be long, so keep the
+      // wording around it short. `emptyBody` and `emptyAction` interpolate
+      // nothing.
+      empty: "{username} has nothing to trade yet.",
       emptyBody: "Your card stays selected.",
       emptyAction: "Choose someone else",
       // CONSTRAINT: they own exactly one card and it is the one you are already
@@ -287,7 +292,13 @@ export const copy = {
       // `confirm` did — an offer was sent, no cards have moved. `successBody`
       // says what happens next and must not promise a timescale or an outcome.
       // `successAction` is a button back to the trading board. Short.
-      success: "Offer sent.",
+      //
+      // `success` interpolates {username} — keep the token, it names the person
+      // the offer went to. That name is read off the created trade rather than
+      // the draft, so it is the recipient the server recorded. The name can be
+      // long, so keep the wording around it short. `successBody` and
+      // `successAction` interpolate nothing.
+      success: "Sent to {username}.",
       successBody: "They'll see it on their board. Nothing moves until they accept.",
       successAction: "Back to your board",
 

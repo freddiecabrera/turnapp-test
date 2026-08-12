@@ -51,6 +51,18 @@ const SERVER_SENTENCE = "server said no";
 
 const PARTNER = userSummary("partner-1", "partner", 77);
 
+/**
+ * The confirmation's headline, with the recipient's name already substituted.
+ *
+ * Taken from the trade the fixture returns rather than from `PARTNER`, because
+ * the screen reads it off the created trade and not off the draft — the two
+ * carry deliberately different usernames here, so an assertion that passed
+ * against the draft's name would be measuring the wrong source.
+ */
+const SENT_TO_RECIPIENT = fill(copy.wizard.review.success, {
+  username: trade().toUser.username,
+});
+
 let router: RouterSpy;
 
 beforeEach(() => {
@@ -94,7 +106,7 @@ describe("the offer being composed", () => {
       "card-offered",
       "card-requested"
     );
-    await screen.findByText(copy.wizard.review.success);
+    await screen.findByText(SENT_TO_RECIPIENT);
   });
 
   it("redirects to step 1 when the draft is incomplete", () => {
@@ -121,7 +133,7 @@ describe("the offer being composed", () => {
     expect(screen.getByText(copy.wizard.review.cancel)).toBeDisabled();
 
     inFlight.resolve(trade({ direction: "sent" }));
-    await screen.findByText(copy.wizard.review.success);
+    await screen.findByText(SENT_TO_RECIPIENT);
   });
 });
 
@@ -139,7 +151,7 @@ describe("the confirmation", () => {
 
     send();
 
-    expect(await screen.findByText(copy.wizard.review.success)).toBeOnTheScreen();
+    expect(await screen.findByText(SENT_TO_RECIPIENT)).toBeOnTheScreen();
     expect(within(screen.getByTestId(GIVE_TEST_ID)).getByText("As Stored")).toBeOnTheScreen();
   });
 
@@ -147,7 +159,7 @@ describe("the confirmation", () => {
     mockApi.createTrade.mockResolvedValue(trade({ direction: "sent" }));
     render(<ReviewOffer />);
     send();
-    await screen.findByText(copy.wizard.review.success);
+    await screen.findByText(SENT_TO_RECIPIENT);
 
     // Back would land on a card picker whose work is done, and re-sending only
     // earns the 409 for an offer that already exists.
@@ -219,7 +231,7 @@ describe("thirteen refusals, three recoveries", () => {
 
     fireEvent.press(screen.getByText(copy.wizard.review.error.retry));
 
-    expect(await screen.findByText(copy.wizard.review.success)).toBeOnTheScreen();
+    expect(await screen.findByText(SENT_TO_RECIPIENT)).toBeOnTheScreen();
     expect(mockApi.createTrade).toHaveBeenNthCalledWith(
       2,
       PARTNER.id,

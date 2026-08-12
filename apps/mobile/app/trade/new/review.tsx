@@ -108,9 +108,17 @@ export default function ReviewOffer() {
     return (
       <WizardScreen step={4} title={copy.wizard.review.title} canGoBack={false}>
         <ScrollView contentContainerStyle={styles.content}>
+          {/* The recipient's name is read off the created trade rather than the
+              draft, for the same reason the cards below are: `POST /trades`
+              records the caller as `fromUser`, so `toUser` is who this offer
+              actually went to. Taking it from `draft.partner` would also make
+              this state depend on the draft outliving the send, which the
+              guard above is deliberately ordered not to assume. */}
           <View style={styles.sentHead}>
             <Ionicons name="checkmark-circle" size={40} color={colors.black} />
-            <Text style={styles.sentTitle}>{copy.wizard.review.success}</Text>
+            <Text style={styles.sentTitle}>
+              {fill(copy.wizard.review.success, { username: sent.toUser.username })}
+            </Text>
             <Text style={styles.sentBody}>{copy.wizard.review.successBody}</Text>
           </View>
 
@@ -214,7 +222,16 @@ const styles = StyleSheet.create({
   to: { fontFamily: fonts.bold, fontSize: 15, color: colors.black, marginBottom: 18 },
 
   sentHead: { alignItems: "center", marginBottom: 28 },
-  sentTitle: { fontFamily: fonts.bold, fontSize: 22, color: colors.black, marginTop: 12 },
+  // Centred explicitly, not just by `alignItems`: the title now carries a
+  // username of unbounded length, and once it wraps the Text fills the row and
+  // every line after the first would sit left of a centred icon and body.
+  sentTitle: {
+    fontFamily: fonts.bold,
+    fontSize: 22,
+    color: colors.black,
+    textAlign: "center",
+    marginTop: 12,
+  },
   sentBody: {
     fontFamily: fonts.regular,
     fontSize: 15,

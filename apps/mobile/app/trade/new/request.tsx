@@ -158,7 +158,7 @@ export default function ChooseRequest() {
       return (
         <WizardNotice
           icon="person-outline"
-          title={copy.wizard.request.empty}
+          title={fill(copy.wizard.request.empty, { username: partner.username })}
           body={copy.wizard.request.emptyBody}
         >
           <PrimaryButton label={copy.wizard.request.emptyAction} onPress={pickSomeoneElse} />
