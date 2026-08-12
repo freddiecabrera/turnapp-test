@@ -90,9 +90,14 @@ export default function ChoosePartner() {
     }
 
     const id = ++runId.current;
-    setSearching(true);
 
     const timer = setTimeout(() => {
+      // Set here rather than before the timer: `searching` is read as "a
+      // request is in flight", and during the debounce window there is not one
+      // yet. Setting it early spun the spinner over nothing and, because the
+      // clear button is drawn on `!searching`, took that button away on the
+      // first keystroke and gave it back only when the search resolved.
+      setSearching(true);
       api
         .searchUsers(q)
         .then((found) => {
