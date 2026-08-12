@@ -18,7 +18,7 @@
     "dev:api": "npm --workspace @turnapp/api run dev",
     "dev:admin": "npm --workspace @turnapp/admin run dev",
     "dev:mobile": "npm --prefix apps/mobile run start",
-    "test": "npm --workspace @turnapp/api run test",
+    "test": "npm --prefix apps/mobile run test && npm --workspace @turnapp/api run test",
     "verify": "npm --workspace @turnapp/api run typecheck && npm --prefix apps/mobile run typecheck && npm --workspace @turnapp/admin run build && npm run test"
   },
   "engines": {
