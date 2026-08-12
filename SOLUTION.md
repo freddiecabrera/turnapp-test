@@ -113,7 +113,47 @@ needs no seed changes.
 
 ## Approach
 
-_[TODO: a short personal statement — how I went about the work, in my own voice.]_
+To be transparent: I used a lot of AI here. That's my general workflow, so it wasn't
+anything out of the ordinary for me.
+
+My initial process was pulling the project down and understanding the requirements and
+the overall goal of the assessment. After that I set up some basic agent rules in
+`AGENTS.md` — how we were going to create PRs, how we'd work, and the loop: open a PR,
+test it, get a code review on it, and only merge after I'd approved and fully tested it.
+
+Then I went through the entire project and made sure it had context, and it gave the
+context of the repo back to me. I read through the files and got to understand this
+codebase the same way I would on any other project. (I keep saying "we" because I was
+working with Claude the whole way through.)
+
+After that we started planning the features, starting with the API design — a lot of
+back and forth on the general architecture. Once that was planned out, I created the API
+tickets in Notion. I set it up so our commit patterns were a specific way, so we had to
+write tests for every endpoint, and so we had to keep it as performant as possible. Once
+the tickets existed, I sent off agents to work on them in parallel.
+
+When the PRs were done I went through and reviewed them — looked at the code, read what
+it had built, made sure the tests passed. The general flow was: an agent opens a PR, a
+fresh agent reviews it, and once that's satisfied I review the code myself, and then it
+gets merged.
+
+With the API designed and all the tests passing, I moved on to the front-end tickets and
+worked out how the flow should go, then got into the UI/UX tickets. Same process — I
+pulled them in, looked at the UI, tested it, and caught a few things I didn't like about
+what Claude had designed. That's where the human part comes in: some of it just didn't
+make sense.
+
+For the pieces I wasn't happy with — specifically the filtering and the stacked rows at
+the top of the trading board — I did some research on Mobbin, which is a place to look at
+existing UI from a lot of different apps. Once I knew what I wanted, I wrote the tickets
+for it and had it built. I also fixed the card component, which was cutting the artwork
+off.
+
+Once I was satisfied, I wrote up a doc of testing steps, went through them, and made sure
+everything held up. That's when I could call it done.
+
+There are other things I'd still like to do in this repo. But overall it was a fun
+project — and it got me excited to work at turn.
 
 ---
 
