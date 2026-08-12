@@ -141,11 +141,40 @@ which also makes a username with an underscore searchable.
 
 ## Connection to my evaluation of the live app
 
-_[TODO: connect this work to the turn app evaluation I wrote. Three findings filed there are
-the same failures this feature is graded on: cards in active trades staying redeemable (a
-possible double-spend), a counter-offer flow that allowed same-card counters and unlimited
-duplicate submissions, and a trade vault listing every card in existence rather than the ones
-actually available.]_
+Before this exercise I evaluated the live turn app and filed 28 findings, seven of them in
+Trading. Three describe the same failures this feature's acceptance criteria test for, which
+made them the sharpest spec available.
+
+**Cards listed in active trades remain selectable and redeemable** — filed High, and as an
+open question, because trading and redeeming the same asset is either intended or an exploit
+path. My suggested fix was server-side state on card availability enforced at redemption time
+rather than client-side filtering. This build's answer is narrower and I'd rather name that
+than overclaim: ownership is re-verified *inside* the accept transaction with a guarded
+decrement, so a second claim on the same copy fails cleanly instead of minting one. That
+closes the double-spend at the moment of the swap. It does not stop one copy being promised to
+four people — escrow is the complete fix, and it needs offer expiry, which the brief puts out
+of scope.
+
+**Counter-offer flow: same-card counters allowed, cards shown without names, unlimited
+duplicate submissions.** All three are closed. Offering and requesting the same card is
+rejected at creation. Every card renders with its name beside its art — the finding's real
+point was that similar-looking cards can't be verified from artwork alone before an
+irreversible decision. And duplicate submissions are prevented by a partial unique index on
+`(fromUserId, toUserId, offeredCardId, requestedCardId) WHERE status = 'PENDING'`. I asked for
+an idempotency key on that mutation; the constraint is the stronger version, because it holds
+no matter what the client does — the race that beats the route's own check still lands on the
+index and gets the same 409.
+
+**Trade vault shows every card in existence instead of my matching cards.** Both pickers are
+fed by real collections — yours filtered to what you own, theirs from `GET /users/:id/cards`,
+which returns only rows with `quantity >= 1`. You cannot request a card they don't have or
+offer one you don't. The no-match empty state I asked for exists, including a case I hadn't
+anticipated: the partner's only card being the one you're already offering.
+
+And one I didn't expect to write. I filed **the trading hub losing scroll position** against
+the live app, with the hypothesis that a remount was resetting the list — then reproduced it
+in my own board, where switching tabs unmounted it and took the filter and scroll offset with
+it. Fixed here. Writing the finding is not the same as being immune to it.
 
 ---
 
