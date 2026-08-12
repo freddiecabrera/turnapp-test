@@ -3,6 +3,7 @@ import { Redirect, useRouter } from "expo-router";
 import ReviewOffer from "../app/trade/new/review";
 import { ApiError, api } from "../src/api";
 import { GET_TEST_ID, GIVE_TEST_ID } from "../src/components/TradeCards";
+import { WIZARD_STEPS } from "../src/components/WizardProgress";
 import { copy, fill } from "../src/copy";
 import { chooseOffered, choosePartner, chooseRequested, resetDraft } from "../src/wizard";
 import {
@@ -62,6 +63,9 @@ const PARTNER = userSummary("partner-1", "partner", 77);
 const SENT_TO_RECIPIENT = fill(copy.wizard.review.success, {
   username: trade().toUser.username,
 });
+
+/** The step counter drawn beside the title, while this is still step 4 of 4. */
+const STEP_COUNTER = fill(copy.wizard.progress, { step: 4, total: WIZARD_STEPS });
 
 let router: RouterSpy;
 
@@ -153,6 +157,24 @@ describe("the confirmation", () => {
 
     expect(await screen.findByText(SENT_TO_RECIPIENT)).toBeOnTheScreen();
     expect(within(screen.getByTestId(GIVE_TEST_ID)).getByText("As Stored")).toBeOnTheScreen();
+  });
+
+  it("stops wearing the wizard's chrome once there is nothing left to review", async () => {
+    mockApi.createTrade.mockResolvedValue(trade({ direction: "sent" }));
+    render(<ReviewOffer />);
+
+    // Both are the composing screen's, and correct while the offer is a draft.
+    expect(screen.getByText(copy.wizard.review.title)).toBeOnTheScreen();
+    expect(screen.getByText(STEP_COUNTER)).toBeOnTheScreen();
+
+    send();
+    await screen.findByText(SENT_TO_RECIPIENT);
+
+    // Neither survives the send. A progress bar and "Review your offer" over a
+    // checkmark would have one screen claim to be a form to fill in and a
+    // record of the thing already having happened, at the same time.
+    expect(screen.queryByText(copy.wizard.review.title)).toBeNull();
+    expect(screen.queryByText(STEP_COUNTER)).toBeNull();
   });
 
   it("is the one state with no way back", async () => {

@@ -77,7 +77,13 @@ export default function ReviewOffer() {
 
   if (sent !== null) {
     return (
-      <WizardScreen step={4} title={copy.wizard.review.title} canGoBack={false}>
+      // No step and no title: the offer has been sent, so this is not step 4 of
+      // anything and there is nothing left to review. Kept as one screen rather
+      // than a fifth route because the trade it renders only exists in this
+      // component's state — but the wizard's chrome would have it claim to be a
+      // form while the checkmark under it says the thing already happened. The
+      // success block below carries its own heading.
+      <WizardScreen canGoBack={false}>
         <ScrollView contentContainerStyle={styles.content}>
           {/* The recipient's name is read off the created trade rather than the
               draft, for the same reason the cards below are: `POST /trades`

@@ -151,20 +151,36 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   badgeText: { color: colors.white, fontFamily: fonts.bold, fontSize: 12 },
+  // An annotation, not a restriction. As a full-width band across the lower
+  // third of the art this borrowed the locked card-back's language — the thing
+  // that elsewhere means a card you cannot have — to say the opposite: that you
+  // already have this one. On a partner whose every card the viewer owned, the
+  // whole grid banded and the screen read as disabled. A chip in one corner
+  // annotates the art instead of covering it, and leaves the card recognisable.
+  //
+  // Solid `black` behind a `white` hairline, rather than a translucent wash:
+  // this season's art runs from pale pink to deep blue, and a wash legible over
+  // one end disappears into the other. Here the fill always carries the white
+  // text and the hairline always separates the chip from dark art, so neither
+  // job depends on what happens to be underneath.
   marker: {
     position: "absolute",
-    left: 0,
-    right: 0,
-    bottom: 0,
-    paddingHorizontal: 6,
-    paddingVertical: 3,
-    backgroundColor: "rgba(0,0,0,0.65)",
+    left: 6,
+    bottom: 6,
+    // With `numberOfLines={1}` on the label, this is what stops a longer marker
+    // from growing back into the band being removed here.
+    maxWidth: "85%",
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    borderRadius: radius.pill,
+    borderWidth: 1,
+    borderColor: colors.white,
+    backgroundColor: colors.black,
   },
   markerText: {
     color: colors.white,
     fontFamily: fonts.bold,
     fontSize: 10,
-    textAlign: "center",
   },
   accent: {
     height: 3,
