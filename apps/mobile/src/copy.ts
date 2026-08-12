@@ -280,6 +280,15 @@ export const copy = {
       // informational — the card is still selectable. One word, fits inside a
       // small pill on a card thumbnail. No interpolation.
       alsoOwned: "Owned",
+      // CONSTRAINT: the same pill as `alsoOwned`, on a card that is NOT
+      // selectable — you already have a pending offer of this same card of
+      // yours to this same person for this one, and the server refuses the
+      // duplicate. Only ever one of the two is drawn, and this one wins, since
+      // it is the only thing on screen saying why the card cannot be tapped:
+      // it has to read as a reason, not as a compliment. One or two words — it
+      // shares `alsoOwned`'s pill and is clipped to a single line. No
+      // interpolation.
+      alreadyOffered: "Offer sent",
     },
 
     // Review + submit.

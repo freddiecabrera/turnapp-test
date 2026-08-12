@@ -99,31 +99,48 @@ export function SelectableCell({
  *
  * `quantity` is the partner's count, badged past one exactly as the
  * collectibles grid badges the viewer's own duplicates. `marker` is the
- * optional "you own one of these too" label, and it is `string | null` rather
- * than optional because `exactOptionalPropertyTypes` is on and the caller
- * computes it conditionally.
+ * optional label in the corner chip, and it is `string | null` rather than
+ * optional because `exactOptionalPropertyTypes` is on and the caller computes
+ * it conditionally.
+ *
+ * `disabled` is for a card the server would refuse — it dims the art and stops
+ * the press, and it is the caller's job to pass a `marker` alongside it saying
+ * why. Only the art dims, not the chip: fading the one thing that explains the
+ * state would leave a card that is unpressable and silent about it.
  */
 export function PartnerCardTile({
   card,
   quantity,
   marker,
+  disabled,
   onPress,
 }: {
   card: Card;
   quantity: number;
   marker: string | null;
+  disabled: boolean;
   onPress: () => void;
 }) {
   return (
-    <Pressable style={styles.tile} onPress={onPress} accessibilityRole="button">
+    <Pressable
+      style={styles.tile}
+      onPress={onPress}
+      disabled={disabled}
+      accessibilityRole="button"
+      accessibilityState={{ disabled }}
+    >
       <View style={styles.imageBox}>
         {card.imageUrl ? (
-          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="contain" />
+          <Image
+            source={{ uri: card.imageUrl }}
+            style={[styles.image, disabled && styles.artDisabled]}
+            resizeMode="contain"
+          />
         ) : (
           // Not the locked card-back: that glyph means "you don't own this",
           // which is true of every card on this screen and is not the fact
           // being reported here. The API sent no image; say only that.
-          <View style={styles.noArt}>
+          <View style={[styles.noArt, disabled && styles.artDisabled]}>
             <Ionicons name="image-outline" size={20} color={colors.grey} />
           </View>
         )}
@@ -177,6 +194,9 @@ const styles = StyleSheet.create({
   },
   image: { width: "100%", height: "100%" },
   noArt: { flex: 1, alignItems: "center", justifyContent: "center" },
+  // The same 0.5 `PrimaryButton` fades a disabled button by, so the one thing
+  // "you cannot press this" looks like is consistent across the wizard.
+  artDisabled: { opacity: 0.5 },
   badge: {
     position: "absolute",
     top: 6,

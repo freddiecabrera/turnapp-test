@@ -4,8 +4,10 @@ import ChooseOffer from "../app/trade/new/offer";
 import ChooseRequest from "../app/trade/new/request";
 import { ApiError, api } from "../src/api";
 import { copy, fill } from "../src/copy";
+import type { Trade } from "../src/types";
 import { chooseOffered, choosePartner, resetDraft } from "../src/wizard";
 import {
+  card,
   flush,
   focusEffectAsEffect,
   ownedCard,
@@ -13,6 +15,7 @@ import {
   refocus,
   resetFocus,
   routerSpy,
+  trade,
   userSummary,
   type RouterSpy,
 } from "../test/trading";
@@ -32,7 +35,7 @@ jest.mock("expo-router", () => ({
 
 jest.mock("../src/api", () => ({
   ...jest.requireActual("../src/api"),
-  api: { cards: jest.fn(), userCards: jest.fn() },
+  api: { cards: jest.fn(), userCards: jest.fn(), trades: jest.fn() },
 }));
 
 const mockApi = jest.mocked(api);
@@ -65,6 +68,10 @@ beforeEach(() => {
   (useRouter as jest.Mock).mockReturnValue(router);
   (useFocusEffect as jest.Mock).mockImplementation(focusEffectAsEffect);
   (Redirect as unknown as jest.Mock).mockImplementation(() => null);
+  // An empty board is the neutral default: step 3 asks for it on every load, so
+  // leaving it unstubbed after `resetAllMocks` would fail every case in the file
+  // on a garnish none of them are about.
+  mockApi.trades.mockResolvedValue([]);
 });
 
 /** Step 3 needs both earlier answers; without them the screen only redirects. */
@@ -297,6 +304,158 @@ describe("step 3 — a partner who disappeared", () => {
     expect(
       screen.getByText(fill(copy.wizard.request.title, { username: PARTNER.username }))
     ).toBeOnTheScreen();
+  });
+});
+
+/**
+ * The duplicate-offer marker, which is mostly a set of things it must NOT do.
+ *
+ * `POST /trades` answers 409 to a second pending offer of the same card to the
+ * same person for the same card of theirs, enforced by a partial unique index
+ * on all four of `(fromUserId, toUserId, offeredCardId, requestedCardId)` where
+ * `status = 'PENDING'`. Step 3 draws that refusal early.
+ *
+ * Every clause of that index is a way to get the rule wrong, and getting it
+ * wrong in this direction is worse than the bug: an over-broad marker silently
+ * removes trades the server would have accepted, and does it in the one place
+ * where nothing contradicts it. So the negative cases below outnumber the
+ * positive one, deliberately.
+ */
+describe("step 3 — a card this exact offer was already sent for", () => {
+  const WANTED = partnerCard("card-wanted", "Wanted");
+  const SPARE = partnerCard("card-spare", "Spare");
+
+  /** The offer the viewer is composing, already sent and still unanswered. */
+  function sentPending(overrides: Partial<Trade> = {}): Trade {
+    return trade({
+      direction: "sent",
+      status: "PENDING",
+      toUser: PARTNER,
+      offeredCard: MY_CARD,
+      requestedCard: WANTED,
+      ...overrides,
+    });
+  }
+
+  /** Step 3 over a two-card collection, with the given board behind it. */
+  async function boardOf(trades: Trade[]) {
+    draftThrough();
+    mockApi.userCards.mockResolvedValue([WANTED, SPARE]);
+    mockApi.cards.mockResolvedValue([MY_CARD]);
+    mockApi.trades.mockResolvedValue(trades);
+
+    render(<ChooseRequest />);
+    await flush();
+  }
+
+  /** Both cards drawn, both pressable, no chip — today's behaviour, unchanged. */
+  function nothingMarked() {
+    expect(screen.queryByText(copy.wizard.request.alreadyOffered)).toBeNull();
+    const cells = grid();
+    expect(cells).toHaveLength(2);
+    for (const cell of cells) expect(cell).not.toBeDisabled();
+  }
+
+  it("marks the card and refuses the selection, without removing it", async () => {
+    await boardOf([sentPending()]);
+
+    // Marked, not hidden: a card visible in their collection and missing from
+    // this grid is a disappearance with no explanation, and suppressing it here
+    // could empty a grid that has two dead-end screens already.
+    const [wanted, spare] = grid();
+    expect(grid()).toHaveLength(2);
+    expect(screen.getByText(copy.wizard.request.alreadyOffered)).toBeOnTheScreen();
+    expect(wanted).toBeDisabled();
+    expect(spare).not.toBeDisabled();
+
+    fireEvent.press(wanted!);
+    expect(screen.getByText(copy.wizard.continue)).toBeDisabled();
+  });
+
+  it("leaves the rest of their collection selectable", async () => {
+    await boardOf([sentPending()]);
+
+    fireEvent.press(grid()[1]!);
+
+    expect(screen.getByText(copy.wizard.continue)).not.toBeDisabled();
+  });
+
+  it("does not mark a pending offer of a different card of the viewer's", async () => {
+    // Same partner, same card of theirs, a different card of yours. That is a
+    // distinct row under the index and a trade the server accepts.
+    await boardOf([sentPending({ offeredCard: card("card-spare-mine", "Spare Mine") })]);
+
+    nothingMarked();
+  });
+
+  it("does not mark a pending offer of this card to somebody else", async () => {
+    // Offering the same card of yours for the same card, to two people at once,
+    // is two rows under the index. Only one of them can be accepted, and the
+    // server is what decides that — not this grid.
+    await boardOf([sentPending({ toUser: userSummary("partner-2", "someone-else", 88) })]);
+
+    nothingMarked();
+  });
+
+  it("does not mark a trade that was offered TO the viewer", async () => {
+    // `direction: "received"` inverts which side each card is on, so the same
+    // four ids describe the opposite row. Not this constraint at all.
+    await boardOf([sentPending({ direction: "received", fromUser: PARTNER, toUser: PARTNER })]);
+
+    nothingMarked();
+  });
+
+  it.each(["ACCEPTED", "DECLINED"] as const)("does not mark a %s trade", async (status) => {
+    // The index is partial on PENDING on purpose: re-sending an identical offer
+    // after a decline is legal, and after an accept the cards have moved.
+    await boardOf([sentPending({ status, respondedAt: "2026-01-02T00:00:00.000Z" })]);
+
+    nothingMarked();
+  });
+
+  it("marks nothing when the board itself never arrives", async () => {
+    // A convenience, not the enforcement. The board is a third garnish on the
+    // partner's collection, so a failed one degrades to today's behaviour —
+    // nothing marked, and the 409 still catches it at the send.
+    draftThrough();
+    mockApi.userCards.mockResolvedValue([WANTED, SPARE]);
+    mockApi.cards.mockResolvedValue([MY_CARD]);
+    mockApi.trades.mockRejectedValue(new Error("Network request failed"));
+
+    render(<ChooseRequest />);
+    await flush();
+
+    expect(screen.queryByText(copy.wizard.request.errorTitle)).toBeNull();
+    nothingMarked();
+  });
+
+  it("re-marks against the live draft when the offer changes behind it", async () => {
+    // Half the rule is the card being offered, and step 2 can change it without
+    // this screen refetching anything.
+    await boardOf([sentPending({ offeredCard: card("card-spare-mine", "Spare Mine") })]);
+    nothingMarked();
+
+    act(() => {
+      chooseOffered(ownedCard("card-spare-mine", "Spare Mine", 1));
+    });
+
+    expect(screen.getByText(copy.wizard.request.alreadyOffered)).toBeOnTheScreen();
+    expect(grid()[0]).toBeDisabled();
+  });
+
+  it("shows the blocking chip rather than the owned one when both apply", async () => {
+    // One chip. `alsoOwned` annotates a card that can still be picked; this one
+    // is the only thing on screen saying why the card does not respond.
+    draftThrough();
+    mockApi.userCards.mockResolvedValue([WANTED, SPARE]);
+    mockApi.cards.mockResolvedValue([MY_CARD, ownedCard("card-wanted", "Wanted", 1)]);
+    mockApi.trades.mockResolvedValue([sentPending()]);
+
+    render(<ChooseRequest />);
+    await flush();
+
+    expect(screen.getByText(copy.wizard.request.alreadyOffered)).toBeOnTheScreen();
+    expect(screen.queryByText(copy.wizard.request.alsoOwned)).toBeNull();
   });
 });
 
