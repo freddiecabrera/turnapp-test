@@ -1,4 +1,4 @@
-import { Prisma } from "@prisma/client";
+import { Prisma, type Trade as PrismaTrade } from "@prisma/client";
 import type { CreateTradeRequest, Trade } from "@turnapp/shared";
 import { asyncRouter } from "../async-router";
 import { prisma } from "../prisma";
@@ -6,14 +6,24 @@ import { requireAuth } from "../auth";
 import { toPublicTrade } from "../serialize";
 
 /**
- * Trading. Creating a trade and accepting one live here; decline lands beside
- * them.
+ * Trading: the board, and the three things a person can do to a trade.
  *
- * Like `usersRouter`, this mounts ahead of `appRouter` in `app.ts` — that one
- * sits on "/" and runs `requireAuth` for everything reaching it, so a router
- * mounted after it never sees its own requests. Same auth posture though: the
- * whole router is behind `requireAuth` and the sender is always
- * `req.auth.userId`, never anything the caller put in the body.
+ * `GET /` reads every trade the caller is part of; `POST /` offers one;
+ * `POST /:id/accept` and `POST /:id/decline` are the two ways it ends. Accept
+ * and decline are named actions rather than a `PATCH { status }` because they
+ * carry wildly different side effects behind the same narrow authorization —
+ * naming them closes the state machine and makes the authz check impossible to
+ * miss on one of them.
+ *
+ * Like `usersRouter`, this mounts ahead of `appRouter` in `app.ts`. That is a
+ * preference, not a requirement: `appRouter` sits on "/" and runs `requireAuth`
+ * for everything reaching it, but `requireAuth` calls `next()` and none of its
+ * own routes match `/trades/...`, so the request falls through and Express
+ * carries on to the next layer whichever order they mount in. Going first just
+ * avoids running `requireAuth` twice and keeps an anonymous 401 coming from the
+ * router that owns the path. Same auth posture either way: the whole router is
+ * behind `requireAuth` and the sender is always `req.auth.userId`, never
+ * anything the caller put in the body.
  *
  * Built with `asyncRouter()`, never `express.Router()` — AGENTS.md requires it
  * of every router here. Express 4 discards the promise an `async` handler
@@ -39,15 +49,25 @@ const DUPLICATE_OFFER = "You've already sent this offer. Check your sent request
 /**
  * Answering is a one-time event, and this is what losing that race sounds like.
  *
- * Reached two ways — the readable pre-check below, and the claim inside the
- * accept transaction, which is the one that actually decides. Same rule at two
- * moments, so the same sentence, for the same reason `DUPLICATE_OFFER` is
- * shared: a user who lost a race deserves the answer a user who didn't race
+ * Reached four ways — the readable pre-check in each of accept and decline, and
+ * the guarded claim in each, which is the one that actually decides. Same rule
+ * at four moments, so the same sentence, for the same reason `DUPLICATE_OFFER`
+ * is shared: a user who lost a race deserves the answer a user who didn't race
  * gets. It deliberately does not name accepted or declined — the claim can only
  * report that somebody got here first, and a message that varied by how the
  * caller found out would be describing our plumbing rather than their trade.
  */
 const ALREADY_ANSWERED = "This trade has already been answered. Refresh to see how it ended.";
+
+/**
+ * One sentence for an id that names no trade, shared by accept and decline.
+ *
+ * Both routes look the trade up the same way and neither can say anything more
+ * specific: a deleted trade and an id that never existed are indistinguishable
+ * here, and telling the two apart would confirm to a stranger that some id they
+ * guessed was once real.
+ */
+const TRADE_NOT_FOUND = "We couldn't find that trade.";
 
 /**
  * Everything `toPublicTrade` needs, and nothing it doesn't.
@@ -118,6 +138,142 @@ async function ownsAtLeastOne(userId: string, cardId: string): Promise<boolean> 
   });
   return (row?.quantity ?? 0) >= 1;
 }
+
+/**
+ * One `(userId, cardId)` pair, flattened into something a Map can key on.
+ *
+ * The separator is a null byte because ids are cuids and a cuid cannot contain
+ * one, so no two distinct pairs can collide on a key — a plain `:` would be
+ * fine today and quietly wrong the day an id format changes. This value never
+ * reaches Postgres, which refuses null bytes inside a `text`; it exists only
+ * between a Map and a Set in this process.
+ */
+function holdingKey(userId: string, cardId: string): string {
+  return `${userId}\u0000${cardId}`;
+}
+
+/** The trade columns fulfillability is computed from, and nothing else. */
+type TradeOwnership = Pick<
+  PrismaTrade,
+  "id" | "status" | "fromUserId" | "toUserId" | "offeredCardId" | "requestedCardId"
+>;
+
+/**
+ * Which of these pending trades could still go through, in one query.
+ *
+ * A trade is fulfillable when both sides still hold what they named: the sender
+ * still owns the offered card, the recipient still owns the requested one. That
+ * is derived here rather than stored, because several pending trades may name
+ * the same copy and accepting one only invalidates the others when the quantity
+ * actually reaches zero — two of three stay valid if the owner had two copies.
+ * A stored flag would need a write-side cascade that cannot know that, and a
+ * derived value cannot itself go stale. See DESIGN.md, "Concurrency: many
+ * trades, one copy".
+ *
+ * **One `UserCard` query for the whole board, not two per trade.** Every
+ * (user, card) pair the board asks about is collected first, deduplicated — the
+ * same copy being contended by three offers is the normal case, not a corner
+ * one — and resolved in a single `findMany`, then mapped back by key. The
+ * alternative reads as harmless in a test with two trades and turns a board of
+ * forty into eighty round trips.
+ *
+ * `quantity >= 1` is how ownership is defined everywhere else in the app: the
+ * swap deletes a row when its last copy leaves, so a row at zero is not
+ * expected — but if one exists it is not a card anybody can trade away, and
+ * saying otherwise here would promise a trade that accept then refuses.
+ *
+ * Answered trades are skipped entirely. `fulfillable` is only meaningful while
+ * a trade is pending, the serializer forces null for the rest regardless, and
+ * their cards have already moved — including them would cost queries to compute
+ * an answer that is thrown away.
+ */
+async function fulfillabilityOf(trades: TradeOwnership[]): Promise<Map<string, boolean>> {
+  const answers = new Map<string, boolean>();
+
+  const pending = trades.filter((t) => t.status === "PENDING");
+  if (pending.length === 0) return answers;
+
+  const wanted = new Map<string, { userId: string; cardId: string }>();
+  for (const trade of pending) {
+    wanted.set(holdingKey(trade.fromUserId, trade.offeredCardId), {
+      userId: trade.fromUserId,
+      cardId: trade.offeredCardId,
+    });
+    wanted.set(holdingKey(trade.toUserId, trade.requestedCardId), {
+      userId: trade.toUserId,
+      cardId: trade.requestedCardId,
+    });
+  }
+
+  // An OR of exact pairs rather than `userId in (…) AND cardId in (…)`: the
+  // cross-product form is one query too, but it reads rows for pairs nobody
+  // asked about and grows as the product of the two lists. Each branch here is
+  // a lookup on the (userId, cardId) unique index.
+  const held = await prisma.userCard.findMany({
+    where: {
+      quantity: { gte: 1 },
+      OR: [...wanted.values()],
+    },
+    select: { userId: true, cardId: true },
+  });
+  const owned = new Set(held.map((row) => holdingKey(row.userId, row.cardId)));
+
+  for (const trade of pending) {
+    answers.set(
+      trade.id,
+      owned.has(holdingKey(trade.fromUserId, trade.offeredCardId)) &&
+        owned.has(holdingKey(trade.toUserId, trade.requestedCardId))
+    );
+  }
+  return answers;
+}
+
+/**
+ * The board: every trade I am part of, in both directions, newest first.
+ *
+ * One flat array rather than `{ sent: [], received: [] }` — one shape to
+ * maintain, and the client renders all/incoming/outgoing by filtering on
+ * `direction`, matching the pill pattern already on the collectibles screen.
+ * `direction` is resolved per trade by the serializer against the caller's own
+ * id, because the stored columns are sender-relative: `offeredCard` always
+ * belongs to `fromUser`, so one row reads inverted for the two parties.
+ *
+ * The `where` is the access control, and it is the only one. There is no trade
+ * id in this request to check an owner against — the caller's token *is* the
+ * query — so a trade the caller is not part of is not filtered out afterwards,
+ * it is never read. (`toPublicTrade` also throws for a non-participant viewer,
+ * which is a backstop against a slip in this clause, not the control itself.)
+ *
+ * Every status is returned, not just the live ones. Acceptance criterion 7
+ * wants a declined trade to still read as declined on both boards, and `Trade`
+ * is a permanent log rather than a queue of open offers.
+ *
+ * `id` breaks ties on `createdAt` so the order is total. Two trades created in
+ * the same millisecond are unlikely and not impossible, and without a
+ * tiebreaker their relative order is whatever the plan happened to produce —
+ * which is a list that reshuffles between two identical requests.
+ */
+tradesRouter.get("/", async (req, res) => {
+  const viewerId = req.auth!.userId;
+
+  const trades = await prisma.trade.findMany({
+    where: { OR: [{ fromUserId: viewerId }, { toUserId: viewerId }] },
+    include: TRADE_WITH_PARTIES,
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+  });
+
+  // Computed for the whole page at once, then read back per trade. Passing an
+  // explicit value — including `null` for the answered ones, which the map has
+  // no entry for — is what `toPublicTrade` requires rather than defaulting,
+  // since a silent null on a live pending trade reads to a client as "already
+  // answered".
+  const fulfillable = await fulfillabilityOf(trades);
+
+  const board: Trade[] = trades.map((trade) =>
+    toPublicTrade(trade, viewerId, fulfillable.get(trade.id) ?? null)
+  );
+  res.json(board);
+});
 
 /**
  * Offer one of my cards for one of yours.
@@ -341,7 +497,7 @@ tradesRouter.post("/:id/accept", async (req, res) => {
       status: true,
     },
   });
-  if (!trade) return res.status(404).json({ error: "We couldn't find that trade." });
+  if (!trade) return res.status(404).json({ error: TRADE_NOT_FOUND });
 
   // The recipient answers, and nobody else — not the sender, who would
   // otherwise be able to take a card by offering for it, and not a bystander
@@ -408,4 +564,91 @@ tradesRouter.post("/:id/accept", async (req, res) => {
     }
     throw e;
   }
+});
+
+/**
+ * Decline a trade: the offer is refused and nothing moves.
+ *
+ * Same authorization as accept — only the recipient answers, and only while the
+ * trade is still pending — and the same guarded claim, for the same reason. Two
+ * simultaneous responses must not both succeed, and the `where` on this
+ * `updateMany` is what decides that: the loser matches nothing and hears
+ * `ALREADY_ANSWERED`, whether the winner accepted or declined.
+ *
+ * **This endpoint never touches `UserCard`.** That is the whole behaviour, not
+ * an incidental property of it — declining is the one response that leaves both
+ * collections exactly as it found them. Note there is no `$transaction` here
+ * and there should not be: accept needs one because it writes three tables and
+ * a half-done swap is worse than a refused one, whereas decline writes a single
+ * row with a single statement, which Postgres already applies all-or-nothing.
+ * Wrapping one statement would only suggest there is a second one to protect.
+ *
+ * Ownership is deliberately *not* re-checked. A sender who has since traded the
+ * offered card away should still be able to have their dead offer refused —
+ * blocking that would leave it pending forever, and it is exactly the offer a
+ * recipient most wants off their board.
+ *
+ * The row is read back after the claim rather than assumed from it: `updateMany`
+ * returns a count, and `respondedAt` is a stored value the client renders. No
+ * transaction is needed to make that read safe — every transition starts from
+ * PENDING, so once this request has won the claim the row cannot change again.
+ */
+tradesRouter.post("/:id/decline", async (req, res) => {
+  const viewerId = req.auth!.userId;
+
+  // Only the columns the decision needs. `include`-ing the parties here would
+  // pull two `User` rows — emails and hashes included — for a request that may
+  // well end in a 403.
+  const trade = await prisma.trade.findUnique({
+    where: { id: req.params.id },
+    select: { id: true, toUserId: true, status: true },
+  });
+  if (!trade) return res.status(404).json({ error: TRADE_NOT_FOUND });
+
+  // The recipient answers, and nobody else. A sender who has changed their mind
+  // has no business declining their own offer: it would report their withdrawal
+  // as the other person's refusal, in a status column whose only job is to say
+  // what a human did. Cancelling a sent offer is a different verb, and one this
+  // API does not have yet.
+  if (trade.toUserId !== viewerId) {
+    return res
+      .status(403)
+      .json({ error: "Only the person this trade was sent to can decline it." });
+  }
+
+  // A readable answer, not the decision. By the time this returns it may
+  // already be stale; the claim below is the one that decides.
+  if (trade.status !== "PENDING") {
+    return res.status(409).json({ error: ALREADY_ANSWERED });
+  }
+
+  // `toUserId` is in the claim as well as in the 403 above, and the two are not
+  // redundant. The check above is a read, so what it authorized is a fact about
+  // a row as it looked a moment ago; this `where` is evaluated by Postgres
+  // against the row it is about to write, under the lock it takes to write it.
+  // That is the only place an authorization decision and the write it permits
+  // are atomic with each other. It costs nothing — the row is being located by
+  // primary key regardless — and it stops this route's correctness from resting
+  // on `Trade.toUserId` never being updatable, which is true of the schema
+  // today and is not a thing this handler knows.
+  //
+  // `status` is the half that arbitrates the race: whoever flips PENDING wins,
+  // and the loser matches nothing.
+  const claim = await prisma.trade.updateMany({
+    where: { id: trade.id, status: "PENDING", toUserId: viewerId },
+    data: { status: "DECLINED", respondedAt: new Date() },
+  });
+  if (claim.count === 0) return res.status(409).json({ error: ALREADY_ANSWERED });
+
+  const declined = await prisma.trade.findUniqueOrThrow({
+    where: { id: trade.id },
+    include: TRADE_WITH_PARTIES,
+  });
+
+  // `null`, not `false`. Fulfillability only describes a pending trade, and the
+  // serializer forces null for an answered one regardless — passing a computed
+  // value here would be a claim this endpoint never checked. `false` would also
+  // read to a client as "this one failed", which is not what declining is.
+  const dto: Trade = toPublicTrade(declined, viewerId, null);
+  return res.json(dto);
 });

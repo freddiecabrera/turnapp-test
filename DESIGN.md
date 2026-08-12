@@ -279,10 +279,45 @@ what they offered, does the recipient still own what was requested. One extra qu
 | Giver had 2 copies | `moveCard` | drops to 1, row survives |
 | Giver had 1 copy | `moveCard` | row deleted, `owned` → false |
 | Receiver already owned it | `upsert` | quantity increments |
-| Two trades between the same pair, accepted at once | Postgres deadlock detection | one aborts → 409 |
+| Two trades between the same pair, accepted at once | Postgres deadlock detection | one aborts → **500**, rolled back |
+| Declining a trade | decline, guarded claim | 200, `UserCard` untouched |
+| Declining an already-answered trade | decline, claim guard | 409 |
+| Re-sending an offer that was declined | create, partial unique index | 201 — the index is `WHERE status = 'PENDING'` |
+| Pending trade whose card has since moved | `GET /trades` | still PENDING, `fulfillable: false` |
 
 The "sender traded it away" row is the one that separates a working submission from a correct
 one, and it's why ownership is validated at accept rather than only at create.
+
+### The deadlock row answers 500, and this table used to claim 409
+
+That claim was written from the Prisma documentation rather than from this codebase, and it
+was wrong. **Prisma 5.22 does not surface a Postgres deadlock as `P2034`.** Measured against
+this schema, over five runs, `40P01` arrives as a `PrismaClientUnknownRequestError` with
+`code` and `meta` both `undefined`; the string `P2034` does not appear anywhere in the
+installed client. The only trace of the Postgres code is inside `err.message` — which is the
+one field this codebase has already decided never to read out and never to return, because a
+Prisma message carries the failing query and an absolute path into the source tree
+(`app.ts`, the error middleware). So a `P2034` branch in accept would be dead code: it would
+make this table read true and change nothing that runs.
+
+**The data is safe either way**, which is why this is a status-code defect and not a
+correctness one. The aborted transaction is by definition the one that moved nothing, and the
+survivor completes normally. What is wrong is only what the loser is told: a conflict it could
+succeed at by retrying, reported as a fault on our side.
+
+Two honest ways to make it a 409, both declined here:
+
+1. **Match `40P01` as a substring of the message.** It works today. It reads the field we
+   treat as unsafe, it is coupled to Prisma's message formatting rather than to anything
+   Prisma documents as an API, and it would be guarded only by a test that has to provoke a
+   real deadlock — a second of `deadlock_timeout` per run for an assertion about a sentence.
+2. **Remove the deadlock rather than rename it**, by ordering the two `moveCard` calls by
+   `cardId` so mirrored trades take their row locks in the same order and one simply waits.
+   This is the real fix — a 409 the caller has to retry is a worse outcome than a swap that
+   just succeeds — and it is already listed under "Out of scope" as *deterministic lock
+   order*. It changes shipped accept behaviour, which is why it is not in this change.
+
+Until then the table says what the code does.
 
 **Mirror trades** (A offers X for Y while B offers Y for X) are legal, and accepting both
 swaps the cards and then swaps them back. Not a bug — but it means "trade completed" does not
@@ -432,6 +467,8 @@ those are genuine invariants, so the database is the right place for them.
 - **Push notifications** — `POST /trades` is the hook point. The board's pending-incoming count
   is the in-app stand-in the brief allows.
 - **Deterministic lock order** — sorting the two `moveCard` calls by `cardId` would close the
-  deadlock window between mirrored trades.
+  deadlock window between mirrored trades. Promoted from a nicety to the recommended next
+  change by the deadlock note under the edge-case table: it is the only one of the two
+  available fixes that leaves nothing for the caller to retry.
 - **Bundles, points-in-trade, expiry, real-time, chat, admin trade management** — excluded by
   `TAKE_HOME.md`.
