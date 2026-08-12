@@ -29,6 +29,28 @@ export default function Cards() {
   const [cards, setCards] = useState<CardWithOwnership[]>([]);
   const [tab, setTab] = useState<TabKey>("your status");
 
+  /**
+   * The board is mounted the first time its pill is opened, and stays mounted.
+   *
+   * Rendering it inside the pill ternary unmounted it on every switch away,
+   * which discarded the direction filter and the scroll offset and re-issued an
+   * unbounded `GET /trades` on the way back — the same "list remounts, scroll
+   * resets" failure filed against the live app's trading hub. Toggling `display`
+   * instead leaves the list's state where the list is.
+   *
+   * The latch preserves the original reason for mounting the board here rather
+   * than lifting its data up: someone who never opens this pill still issues no
+   * trade request at all. What it costs is that once opened, the board's own
+   * focus refresh runs whenever this tab is focused, including while the
+   * collectibles grid is the visible pill.
+   */
+  const [boardOpened, setBoardOpened] = useState(false);
+
+  const openTab = useCallback((next: TabKey) => {
+    setTab(next);
+    if (next === "trading board") setBoardOpened(true);
+  }, []);
+
   const load = useCallback(async () => {
     try {
       setCards(await api.cards());
@@ -59,7 +81,7 @@ export default function Cards() {
           <Pressable
             key={t}
             testID={tabTestID(t)}
-            onPress={() => setTab(t)}
+            onPress={() => openTab(t)}
             style={[styles.pill, tab === t && styles.pillActive]}
           >
             <Text style={[styles.pillText, tab === t && styles.pillTextActive]}>{t}</Text>
@@ -80,16 +102,16 @@ export default function Cards() {
             </View>
           )}
         />
-      ) : tab === "trading board" ? (
-        // The board owns its own loading, refresh and error states, and does
-        // its own focus refresh — mounting it here rather than lifting its data
-        // up keeps `GET /trades` off the collection tab for anyone who never
-        // opens this pill.
-        <TradingBoard />
-      ) : (
+      ) : tab === "reward store" ? (
         <View style={styles.comingSoon}>
           <Text style={styles.comingSoonTitle}>{tab}</Text>
           <Text style={styles.comingSoonText}>coming soon</Text>
+        </View>
+      ) : null}
+
+      {boardOpened && (
+        <View style={[styles.board, tab !== "trading board" && styles.boardHidden]}>
+          <TradingBoard />
         </View>
       )}
     </SafeAreaView>
@@ -130,6 +152,10 @@ const styles = StyleSheet.create({
   grid: { paddingHorizontal: 16, paddingBottom: 24 },
   row: { gap: GAP, marginBottom: GAP },
   cell: { flex: 1 },
+  board: { flex: 1 },
+  // `display: "none"` takes the board out of layout entirely while leaving it
+  // mounted, which is the whole point: its list keeps its scroll offset.
+  boardHidden: { display: "none" },
   comingSoon: { flex: 1, alignItems: "center", justifyContent: "center" },
   comingSoonTitle: { fontFamily: fonts.bold, fontSize: 20, color: colors.black },
   comingSoonText: { fontFamily: fonts.regular, fontSize: 15, color: colors.grey, marginTop: 6 },
