@@ -98,7 +98,13 @@ function TradeCard({
       </Text>
       <View style={[styles.art, detail && styles.artDetail]}>
         {card.imageUrl ? (
-          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="cover" />
+          // `contain`, not `cover`. The box is already the shape of a card, so
+          // the two agree for every image the seed ships — but admins upload
+          // card art, and `cover` answers a differently-proportioned upload by
+          // cropping it. `contain` letterboxes it against the grey instead,
+          // which shows a wrong-shaped card as wrong-shaped rather than as
+          // correct-and-missing-its-story.
+          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="contain" />
         ) : (
           // Not the locked card-back: that glyph means "you don't own this",
           // which is a different fact from "the API sent no image".
@@ -115,9 +121,46 @@ function TradeCard({
   );
 }
 
+/**
+ * The proportions of a turn card: 575 × 1198, which is what every image in
+ * `apps/api/static/cards` is exported at.
+ *
+ * The box used to be `0.7` — the proportions of a physical trading card, and a
+ * reasonable guess at these. It is not what these are. A turn card is much
+ * taller: header bar, art, name, rarity pips, universe, type badge and the
+ * card's story, stacked. Held in a 0.7 box by `cover`, the whole bottom third
+ * was cropped away, so every trade drew two cards cut off mid-sentence.
+ */
+const CARD_ASPECT = 575 / 1198;
+
+/**
+ * How wide a card is drawn on each surface. `aspectRatio` derives the height.
+ *
+ * A fixed width rather than `width: "100%"` with a `maxWidth` cap. That pairing
+ * looks more responsive and is wrong: `aspectRatio` resolves against the
+ * percentage width — the full column — and `maxWidth` then clamps only the
+ * width, leaving a box the height of a card twice as wide. The card sits
+ * correctly inside it and the extra a hundred points draw as grey bars above
+ * and below, which is the same "the card looks broken" this whole change set
+ * out to fix.
+ *
+ * Both numbers are chosen so each surface keeps the height it already had. A
+ * card at its true shape is much narrower than the 0.7 box it replaces, and
+ * these widths land within a couple of points of the old heights, so nothing
+ * below moves: the board's rows are the size they were, and the review screen's
+ * accept and decline buttons stay where they were on screen. They are also
+ * comfortably narrower than the tightest column any supported phone gives a
+ * card, so neither needs to shrink to fit.
+ */
+const ROW_CARD_WIDTH = 100;
+const DETAIL_CARD_WIDTH = 108;
+
 const styles = StyleSheet.create({
   wrap: { flexDirection: "row", alignItems: "center" },
-  side: { flex: 1 },
+  // Centred, because a card no longer fills its column: left-aligning the
+  // label and name against the column edge would leave them floating away
+  // from the card they belong to.
+  side: { flex: 1, alignItems: "center" },
   arrow: { marginHorizontal: 10 },
   label: {
     fontFamily: fonts.bold,
@@ -125,15 +168,18 @@ const styles = StyleSheet.create({
     color: colors.grey,
     textTransform: "lowercase",
     marginBottom: 5,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   labelDetail: { fontSize: 13, marginBottom: 8 },
   art: {
-    aspectRatio: 0.7,
+    width: ROW_CARD_WIDTH,
+    aspectRatio: CARD_ASPECT,
     borderRadius: radius.sm,
     overflow: "hidden",
     backgroundColor: colors.lightGrey,
   },
-  artDetail: { borderRadius: radius.md },
+  artDetail: { width: DETAIL_CARD_WIDTH, borderRadius: radius.md },
   image: { width: "100%", height: "100%" },
   noArt: { flex: 1, alignItems: "center", justifyContent: "center" },
   accent: {
@@ -148,6 +194,8 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.black,
     marginTop: 6,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   nameDetail: { fontFamily: fonts.bold, fontSize: 16, marginTop: 10 },
 });
