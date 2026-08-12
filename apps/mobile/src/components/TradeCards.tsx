@@ -67,21 +67,48 @@ export function TradeCards({
 
   return (
     <View style={styles.wrap}>
-      <TradeCard card={give} label={copy.trade.give} detail={detail} />
+      <TradeCard card={give} label={copy.trade.give} detail={detail} testID={GIVE_TEST_ID} />
       <Ionicons
         name="swap-horizontal"
         size={detail ? 26 : 18}
         color={colors.grey}
         style={styles.arrow}
       />
-      <TradeCard card={get} label={copy.trade.get} detail={detail} />
+      <TradeCard card={get} label={copy.trade.get} detail={detail} testID={GET_TEST_ID} />
     </View>
   );
 }
 
-function TradeCard({ card, label, detail }: { card: Card; label: string; detail: boolean }) {
+/**
+ * Handles on the two columns, so the inversion above can be asserted.
+ *
+ * Which card lands on which side is the single most invertible fact in the
+ * feature and the one all three trading surfaces inherit from here — but the
+ * only thing separating the two columns on screen is their `copy.ts` label, and
+ * those strings are provisional and owned by the repo owner. A test that reached
+ * for the give column by its wording would fail the day that wording changed and
+ * would report it as the trade rendering backwards.
+ *
+ * Exported rather than written as a literal in a suite for the same reason the
+ * component is the only place `giveAndGet` is called: one name, or two that
+ * drift.
+ */
+export const GIVE_TEST_ID = "trade-card-give";
+export const GET_TEST_ID = "trade-card-get";
+
+function TradeCard({
+  card,
+  label,
+  detail,
+  testID,
+}: {
+  card: Card;
+  label: string;
+  detail: boolean;
+  testID: string;
+}) {
   return (
-    <View style={styles.side}>
+    <View style={styles.side} testID={testID}>
       <Text style={[styles.label, detail && styles.labelDetail]} numberOfLines={1}>
         {label}
       </Text>

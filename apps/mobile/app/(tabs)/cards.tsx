@@ -11,6 +11,19 @@ import type { CardWithOwnership } from "../../src/types";
 const TABS = ["your status", "reward store", "trading board"] as const;
 type TabKey = (typeof TABS)[number];
 
+/**
+ * A handle on each pill that is not its label.
+ *
+ * These three labels never went through `copy.ts` — they predate it and double
+ * as the tab keys. Reaching for the trading pill by its wording would tie a
+ * test to a string that is still the repo owner's to rewrite, so each pill
+ * carries an id that survives the rewrite: `collectibles-tab-trading-board`.
+ *
+ * Not exported, because expo-router treats a route module's exports as part of
+ * the route's contract.
+ */
+const tabTestID = (tab: TabKey) => `collectibles-tab-${tab.replace(/\s+/g, "-")}`;
+
 export default function Cards() {
   const router = useRouter();
   const [cards, setCards] = useState<CardWithOwnership[]>([]);
@@ -45,6 +58,7 @@ export default function Cards() {
         {TABS.map((t) => (
           <Pressable
             key={t}
+            testID={tabTestID(t)}
             onPress={() => setTab(t)}
             style={[styles.pill, tab === t && styles.pillActive]}
           >
