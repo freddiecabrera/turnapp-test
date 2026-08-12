@@ -1,6 +1,6 @@
 import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { colors, fonts, radius } from "../theme";
+import { CARD_ASPECT, colors, fonts, radius } from "../theme";
 import type { CardWithOwnership } from "../types";
 
 export const RARITY_COLORS: Record<string, string> = {
@@ -26,13 +26,13 @@ export function CardTile({
     <Pressable style={styles.wrap} onPress={onPress}>
       <View style={styles.imageBox}>
         {card.owned && card.imageUrl ? (
-          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="cover" />
+          <Image source={{ uri: card.imageUrl }} style={styles.image} resizeMode="contain" />
         ) : (
           <View style={styles.locked}>
             <Image
               source={require("../../assets/images/card-back.png")}
               style={styles.lockedImage}
-              resizeMode="cover"
+              resizeMode="contain"
             />
             <View style={styles.lockOverlay}>
               <Ionicons name="lock-closed" size={26} color="rgba(255,255,255,0.85)" />
@@ -56,7 +56,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   imageBox: {
-    aspectRatio: 0.7,
+    aspectRatio: CARD_ASPECT,
     borderRadius: radius.sm,
     overflow: "hidden",
     backgroundColor: "#efefef",
