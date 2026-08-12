@@ -127,7 +127,8 @@ Or individually:
 npm --workspace @turnapp/api run typecheck     # tsc --noEmit, src + prisma + test
 npm --prefix apps/mobile run typecheck         # tsc --noEmit
 npm --workspace @turnapp/admin run build       # vite build
-npm test                                       # vitest, API integration tests
+npm --prefix apps/mobile run test              # jest, no Docker or database
+npm --workspace @turnapp/api run test          # vitest, needs both
 ```
 
 **Generate the Prisma client first on a fresh checkout**, or the API typecheck fails with
@@ -143,14 +144,15 @@ npm --workspace @turnapp/api run prisma:generate
 
 ### Tests
 
-`npm test` runs Vitest against a **separate test database** on the same container — dev data is
-never touched. The global setup runs `prisma migrate reset --force --skip-seed` against that
-database, which creates it on first run and rebuilds it from the migration files on every run.
-Rebuilding rather than `migrate deploy`-ing is deliberate: `deploy` keys off a migration's
-*name*, so it ignores the hand-edits to already-applied migration SQL that "Changing the data
-model" step 4 tells you to make.
+`npm test` runs the mobile suite first, then the API's. The API suite runs Vitest against a
+**separate test database** on the same container — dev data is never touched. The global setup
+runs `prisma migrate reset --force --skip-seed` against that database, which creates it on
+first run and rebuilds it from the migration files on every run. Rebuilding rather than
+`migrate deploy`-ing is deliberate: `deploy` keys off a migration's *name*, so it ignores the
+hand-edits to already-applied migration SQL that "Changing the data model" step 4 tells you to
+make.
 
-Prerequisites are the full cold start, not just Docker: `.env`, `npm install`,
+The API suite's prerequisites are the full cold start, not just Docker: `.env`, `npm install`,
 `prisma:generate` (see the note ten lines above), and `npm run db:up`.
 
 **The test database is per checkout, not per repo.** `test/env.ts` appends `_test_<tag>` to the
@@ -194,8 +196,22 @@ Routes are exercised over HTTP with supertest against the app exported from
 call, so importing the app never collides with a dev server on 4000. `test/helpers.ts` has
 `api()` and `authedApi(user, method, url)`.
 
-The mobile app has no `test` script on this branch; its Jest suite
-(`npm --prefix apps/mobile run test`) arrives with the `feat/mobile-test-harness` branch.
+The mobile suite is Jest under the `jest-expo` preset — `npm --prefix apps/mobile run test`,
+and now the first half of `npm test`, which is how the gate reaches it. It needs no Docker, no
+database and no Metro server: the three files in `apps/mobile/__tests__` exercise pure
+functions with `fetch` and `expo-constants` mocked, and render no components. That makes it the
+half of the gate that still runs on a machine with nothing else set up. It does need
+`npm --prefix apps/mobile install` though — mobile is outside the workspace (quirk 1 above), so
+a root-only install leaves `jest` missing.
+
+`api.test.ts` holds the module-private `request` helper to its error, 204 and header behaviour
+and pins each card endpoint to resolving `imageUrl`; `config.test.ts` walks the `API_URL`
+precedence chain listed under "Networking" and covers `resolveImageUrl`; `rarityColor.test.ts`
+covers the rarity palette. Two constraints if you add to it. `API_URL` is computed at module
+load, so each case installs its mocks and then `require`s `src/config` — a top-level `import`
+would pin whatever the first case loaded and leave the lower tiers of the chain unreachable.
+And `request` is reached through the `api` wrappers rather than exported, on the principle that
+a test should not widen the surface of the code it measures.
 
 For API behaviour, curl against a running server:
 
