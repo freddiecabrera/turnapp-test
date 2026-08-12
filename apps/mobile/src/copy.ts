@@ -148,41 +148,171 @@ export const copy = {
    * than restructuring this object.
    */
   wizard: {
-    // Step 1 — pick a person. CONSTRAINT: `searchPlaceholder` goes inside the
-    // input and must hint that BOTH a username and a numeric user ID work.
-    // `empty` shows when a search returned nothing; `prompt` shows before the
-    // first search. Short lines. No interpolation.
-    partner: {
-      title: "Choose a partner",
-      searchPlaceholder: "Username or ID",
-      prompt: "Search for someone to trade with.",
-      empty: "No one found.",
+    // CONSTRAINT: the step counter drawn on all four screens. Interpolates
+    // {step} and {total} — {total} is 4 and comes from the code, so a rewrite
+    // that hardcodes a number will lie the day a step is added or removed. One
+    // very short line, sits above the screen title.
+    progress: "Step {step} of {total}",
+
+    // CONSTRAINT: the accessibility label of the bare back chevron every step
+    // draws for itself. Never rendered as visible text, so length is free, but
+    // it must say where back goes: to the previous step, and out of the wizard
+    // from step 1. No interpolation.
+    back: "Go back",
+
+    // CONSTRAINT: the button that moves from step 2 to step 3, and from step 3
+    // to the review. Both steps use this one label, so it must read correctly
+    // after picking either card. It is disabled until something is selected, so
+    // it must not itself say "pick a card". Two words at most.
+    continue: "Continue",
+
+    // CONSTRAINT: the button that re-runs a failed load, on all three steps.
+    // Two words at most. No interpolation.
+    retry: "Try again",
+
+    // CONSTRAINT: the caller is a staff account, and `POST /trades` refuses
+    // those before it checks anything else — so the whole wizard is a dead end
+    // for them and this is shown in place of step 1 rather than after four
+    // steps of work. There is no action that fixes it; the only way out is
+    // back. `title` one short line, `body` at most two. No interpolation.
+    blocked: {
+      title: "Trading isn't available on this account.",
+      body: "Staff accounts can't send or receive trades.",
     },
 
-    // Step 2 — pick the card you are giving. CONSTRAINT: `empty` covers a user
-    // who owns nothing to offer. Short. No interpolation.
+    // Step 1 — pick a person.
+    partner: {
+      title: "Choose a partner",
+      // CONSTRAINT: goes inside the input. Must hint that BOTH a username and a
+      // numeric user ID work — but usernames match on any part of the name
+      // while an ID must be typed in full and exactly (no prefixes, no leading
+      // zeros), so this must not imply that a partial ID finds anyone. Has to
+      // fit one line of a text field. No interpolation.
+      searchPlaceholder: "Username or ID",
+      // CONSTRAINT: nothing has been typed yet. This is the idle state, NOT a
+      // no-results state — the server never ran a query — so it must read as an
+      // invitation rather than as a failure. One short line. No interpolation.
+      prompt: "Search for someone to trade with.",
+      // CONSTRAINT: a search ran and matched nobody. Must not read as an error.
+      // One short line. No interpolation.
+      empty: "No one found.",
+      // CONSTRAINT: sits under `empty` and explains why a search that looks
+      // right can still match nobody: usernames match on any part, an ID has to
+      // be exact. This is the only place the exact-ID rule is stated, so it
+      // carries it. At most two lines. No interpolation.
+      emptyHint: "Usernames match on any part. An ID has to be exact.",
+      // CONSTRAINT: the result list is capped at 20 by the server, with no
+      // pagination and no total count — so this may NOT say how many people
+      // matched or promise that more can be loaded. It interpolates {count},
+      // which is the number shown, not the number that exist. Its only job is
+      // to tell someone whose person is missing to type more. One short line.
+      capped: "Showing the first {count}. Type more to narrow it down.",
+      // CONSTRAINT: the search request itself failed. `body` is used ONLY when
+      // the failure produced no server message — a dropped connection, a
+      // timeout; when the server did answer with an error, that sentence is
+      // rendered instead, verbatim. `title` one short line, `body` at most two.
+      errorTitle: "Couldn't search.",
+      errorBody: "Check your connection and try again.",
+      // CONSTRAINT: how a person's ID number is drawn beside their username in
+      // a result row. Interpolates {id} — keep the token. This is a format, not
+      // a sentence: a couple of characters around the number at most.
+      idFormat: "#{id}",
+    },
+
+    // Step 2 — pick the card you are giving, from your own collection.
     offer: {
       title: "Choose your card",
+      // CONSTRAINT: a hard dead end — a new account owns nothing, so there is
+      // no card to offer and no other step can fix it. `empty` is the title,
+      // `emptyBody` says how cards are acquired, and `emptyAction` is a button
+      // that leaves the wizard for the scan flow. Nothing here may suggest
+      // going back a step. Short.
       empty: "You have no cards to offer.",
+      emptyBody: "Scan a card to start your collection, then come back.",
+      emptyAction: "Go to scan",
+      // CONSTRAINT: your collection failed to load. Same `body` rule as
+      // `partner.errorBody` — only used when the server described nothing.
+      errorTitle: "Couldn't load your cards.",
+      errorBody: "Check your connection and try again.",
     },
 
     // Step 3 — pick the card you are asking for, from their collection.
-    // CONSTRAINT: `title` interpolates {username}; keep the token so the step
-    // says whose collection this is. `empty` covers a partner who owns nothing.
     request: {
+      // CONSTRAINT: interpolates {username} — keep the token, it is what says
+      // whose collection is on screen. One line, and the name can be long, so
+      // keep the wording around it short.
       title: "Choose a card from {username}",
+      // CONSTRAINT: this partner owns nothing. Search returns anyone who isn't
+      // staff regardless of collection size, so an empty person is selectable
+      // and this is reachable. A dead end for this partner only — `emptyAction`
+      // goes back to the search, and must NOT read as abandoning the trade,
+      // because the card you picked to give is kept. Short.
       empty: "They have no cards to trade.",
+      emptyBody: "Pick someone else and your card stays selected.",
+      emptyAction: "Choose someone else",
+      // CONSTRAINT: they own exactly one card and it is the one you are already
+      // offering, so suppressing it emptied the list. Distinct from `empty`:
+      // this person does have a card, it just cannot be both sides of one
+      // trade. `action` goes back to step 2 to give something else. Short.
+      onlyOffered: {
+        title: "That's the only card they have.",
+        body: "It's the one you're offering, and a trade can't have the same card on both sides.",
+        action: "Change what you're giving",
+      },
+      // CONSTRAINT: their collection failed to load. Reachable as a 404 if the
+      // account disappeared between step 1 and here, in which case the server's
+      // own sentence is rendered instead of `errorBody`. Short.
+      errorTitle: "Couldn't load their cards.",
+      errorBody: "Check your connection and try again.",
+      // CONSTRAINT: a badge on a card in THEIR collection that you already own
+      // a copy of, so someone completing a set can skip it. Purely
+      // informational — the card is still selectable. One word, fits inside a
+      // small pill on a card thumbnail. No interpolation.
+      alsoOwned: "Owned",
     },
 
-    // Review + submit. CONSTRAINT: `confirm` is the button that actually
-    // creates the trade — it must read as sending an offer, not as completing a
-    // swap, because nothing moves until the other person accepts. `success`
-    // must say the same. Short.
+    // Review + submit.
     review: {
       title: "Review your offer",
+      // CONSTRAINT: names who the offer is going to. Interpolates {username} —
+      // keep the token. One short line.
+      to: "To {username}",
+      // CONSTRAINT: `confirm` is the button that actually creates the trade —
+      // it must read as sending an offer, not as completing a swap, because
+      // nothing moves until the other person accepts. `cancel` abandons the
+      // whole wizard, not one step. Short.
       confirm: "Send offer",
       cancel: "Cancel",
+      // CONSTRAINT: the offer was created. `success` must say the same thing
+      // `confirm` did — an offer was sent, no cards have moved. `successBody`
+      // says what happens next and must not promise a timescale or an outcome.
+      // `successAction` is a button back to the trading board. Short.
       success: "Offer sent.",
+      successBody: "Nothing moves until they accept. You'll see it on your board.",
+      successAction: "Back to your board",
+
+      // CONSTRAINT: sending failed. Thirteen failures are documented on `POST
+      // /trades` and they collapse into three recoveries, which is why there
+      // are three sets of buttons here rather than thirteen messages. The
+      // server's own sentence is rendered above them verbatim whenever it sent
+      // one — these are only the labels on the ways out.
+      //
+      // `body` is used ONLY when the failure produced no server message.
+      // `retry` re-sends unchanged, for a failure that may not repeat.
+      // `changeOffer` / `changeRequest` / `changePartner` go back to steps 2, 3
+      // and 1 respectively, and cover every failure that means "something you
+      // picked is no longer true". `board` covers the one failure that means
+      // the offer already exists, so the board is where it is. All are button
+      // labels: three or four words at most.
+      error: {
+        title: "Couldn't send that offer.",
+        body: "Check your connection and try again.",
+        retry: "Try again",
+        changeOffer: "Change what you're giving",
+        changeRequest: "Change what you're asking for",
+        changePartner: "Choose someone else",
+        board: "Go to your board",
+      },
     },
   },
 
